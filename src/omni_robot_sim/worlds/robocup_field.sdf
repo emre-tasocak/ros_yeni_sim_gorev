@@ -1,0 +1,182 @@
+<?xml version="1.0" ?>
+<!--
+  RoboCup-style arena for the 3-wheeled omni robot.
+  Field: 6 m × 4 m  (approx. RoboCup junior soccer field)
+  Walls are 0.3 m tall white panels.
+  A few cylindrical obstacles are placed in the field.
+-->
+<sdf version="1.9">
+  <world name="robocup_field">
+
+    <!-- ─── Physics ──────────────────────────────────────────────── -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- ─── Required Gazebo system plugins ───────────────────────── -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-contact-system"
+            name="gz::sim::systems::Contact"/>
+
+    <!-- ─── Lighting ─────────────────────────────────────────────── -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- ─── Ground plane (green – RoboCup field) ─────────────────── -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>20 20</size></plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode><mu>0.8</mu><mu2>0.8</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <cast_shadows>false</cast_shadows>
+          <geometry>
+            <plane><normal>0 0 1</normal><size>20 20</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.1 0.5 0.1 1</ambient>
+            <diffuse>0.2 0.6 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ─── Field boundary walls ─────────────────────────────────── -->
+    <!-- Wall dimensions: length × 0.05 (thick) × 0.3 (high)         -->
+    <!-- Field corners: (±3, ±2)                                      -->
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 2.025 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>6.1 0.05 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>6.1 0.05 0.3</size></box></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -2.025 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>6.1 0.05 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>6.1 0.05 0.3</size></box></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>3.025 0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.05 4.0 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>0.05 4.0 0.3</size></box></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-3.025 0 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.05 4.0 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>0.05 4.0 0.3</size></box></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ─── Cylindrical obstacles (simulate soccer ball / cones) ─── -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>1.0 0.5 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry></collision>
+        <visual   name="vis">
+          <geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry>
+          <material><ambient>1 0.5 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>-1.0 -0.8 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry></collision>
+        <visual   name="vis">
+          <geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry>
+          <material><ambient>1 0.5 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="obstacle_3">
+      <static>true</static>
+      <pose>0.5 -1.2 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry></collision>
+        <visual   name="vis">
+          <geometry><cylinder><radius>0.08</radius><length>0.2</length></cylinder></geometry>
+          <material><ambient>1 0.5 0 1</ambient><diffuse>1 0.5 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ─── Goal markers (box posts at centre of each short wall) ── -->
+    <model name="goal_post_east_n">
+      <static>true</static>
+      <pose>3.0 0.4 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.05 0.05 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>0.05 0.05 0.3</size></box></geometry>
+          <material><ambient>1 1 0 1</ambient><diffuse>1 1 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="goal_post_east_s">
+      <static>true</static>
+      <pose>3.0 -0.4 0.15 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.05 0.05 0.3</size></box></geometry></collision>
+        <visual   name="vis">
+          <geometry><box><size>0.05 0.05 0.3</size></box></geometry>
+          <material><ambient>1 1 0 1</ambient><diffuse>1 1 0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
