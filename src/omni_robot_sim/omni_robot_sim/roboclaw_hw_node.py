@@ -21,8 +21,8 @@ Kinematic parameters:
   r = 0.05 m   (wheel radius)
   L = 0.20 m   (robot base radius)
   GEAR_RATIO = 30   (30:1 gearbox)
-  CPR = 64          (encoder counts per motor revolution)
-  TICKS_PER_TURN = 1920  (= CPR × GEAR_RATIO)
+  CPR = 25          (encoder counts per motor revolution)
+  TICKS_PER_TURN = 750   (= CPR × GEAR_RATIO)
 
 Wheel layout (body frame, top view)  – MCE402 project report:
   Wheel 1 at α = -60°  (front-right)  → ( 0.10, -0.173)
@@ -82,8 +82,8 @@ ADDR_12 = 0x80   # RoboClaw #1 (wheel 1 + wheel 2)
 ADDR_3  = 0x81   # RoboClaw #2 (wheel 3)
 
 GEAR_RATIO      = 30
-CPR             = 64          # encoder counts per motor revolution (before gearbox)
-TICKS_PER_TURN  = CPR * GEAR_RATIO   # = 1920
+CPR             = 25          # encoder counts per motor revolution (before gearbox)
+TICKS_PER_TURN  = CPR * GEAR_RATIO   # = 750
 
 # Wheel angles [rad]: wheel_1=-60°, wheel_2=+60°, wheel_3=180°  (MCE402 report)
 ALPHA = [-math.pi / 3, math.pi / 3, math.pi]

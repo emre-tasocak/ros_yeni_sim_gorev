@@ -60,5 +60,5 @@ ros2 launch omni_mission mission_hardware.launch.py \
 - Tekerlek yarıçapı: **r = 0.05 m**
 - Robot yarıçapı (L): **L = 0.20 m**
 - Tekerlek açıları: **α₁ = -60°, α₂ = +60°, α₃ = 180°**
-- RoboClaw encoder: **1920 tick/tur** (64 CPR × 30:1)
+- RoboClaw encoder: **750 tick/tur** (25 CPR × 30:1)
 - Baud: **38400**, Adres: 0x80 (motor 1+2), 0x81 (motor 3)
