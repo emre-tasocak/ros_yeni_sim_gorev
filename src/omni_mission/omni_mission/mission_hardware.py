@@ -2,46 +2,27 @@
 mission_hardware.py  –  GERÇEK ROBOT GÖREVİ
 ============================================
 GÖREV AKIŞI:
-  1. 10 saniye bekle (sistem oturulsun)
-  2. Robot dur, 2 saniye sadece LiDAR tara
-  3. En yakın cismi bul (LiDAR range_min≈0.15m sayesinde kendi gövdesini görmez)
-  4. Cismin önünde STOP_DIST m uzakta hedefe düz git
-  5. 3 saniye bekle → başlangıç noktasına düz geri dön
+  1. WAITING   – 10 saniye bekle
+  2. SCANNING  – Robot dur, 2 saniye sadece LiDAR tara
+                 Ön ±90° içinde en yakın cismi seç
+  3. NAVIGATING– Hedefe düz git (P kontrolcü, dönme yok)
+  4. AT_GOAL   – 3 saniye bekle
+  5. RETURNING – Başlangıç noktasına düz geri dön
+  6. DONE      – Dur
+
+ÇALIŞTIRMAK İÇİN:
+  ros2 launch omni_mission mission_hardware.launch.py \
+    roboclaw_port:=/dev/ttyUSB0 lidar_port:=/dev/ttyUSB1
 """
 
 import math
-import numpy as np
 from enum import Enum, auto
 
 import rclpy
 from rclpy.node import Node
-
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Quintic polinom yardımcı fonksiyonları
-# ══════════════════════════════════════════════════════════════════════════════
-
-def quintic_coeffs(p0, v0, a0, pf, vf, af, T):
-    A = np.array([
-        [1,  0,   0,    0,       0,        0       ],
-        [0,  1,   0,    0,       0,        0       ],
-        [0,  0,   2,    0,       0,        0       ],
-        [1,  T,   T**2, T**3,    T**4,     T**5    ],
-        [0,  1,   2*T,  3*T**2,  4*T**3,   5*T**4  ],
-        [0,  0,   2,    6*T,     12*T**2,  20*T**3 ],
-    ], dtype=float)
-    b = np.array([p0, v0, a0, pf, vf, af], dtype=float)
-    return np.linalg.solve(A, b)
-
-
-def quintic_eval(c, t):
-    pos = c[0] + c[1]*t + c[2]*t**2 + c[3]*t**3 + c[4]*t**4 + c[5]*t**5
-    vel = c[1] + 2*c[2]*t + 3*c[3]*t**2 + 4*c[4]*t**3 + 5*c[5]*t**4
-    return pos, vel
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,46 +39,43 @@ class State(Enum):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Ana görev sınıfı  –  GERÇEK DONANIM
+# Görev düğümü
 # ══════════════════════════════════════════════════════════════════════════════
 
 class OmniMissionHW(Node):
 
-    WAIT_SEC      = 10.0   # başlangıç bekleme [s]
-    SCAN_WAIT     = 2.0    # tarama süresi – robot durur [s]
-    STOP_DIST     = 0.50   # cismin önünde dur mesafesi [m]
-    SCAN_HALF_DEG = 90.0   # sadece ön ±90° taranır (arkadaki duvarlar yok sayılır)
-    GOAL_TOL      = 0.15   # hedefe varış toleransı [m]
-    AT_GOAL_WAIT  = 3.0    # hedefe varınca bekleme [s]
-    MAX_VEL       = 0.18   # maksimum hız [m/s]
-    MAX_ANG       = 0.9    # maksimum açısal hız [rad/s]
-    KP_POS        = 1.5    # konum P katsayısı
-    KP_HDG        = 1.2    # yön P katsayısı
-    APPROACH_DIST = 0.6    # yaklaşma yavaşlama mesafesi [m]
-    APPROACH_VEL  = 0.06   # yaklaşma minimum hızı [m/s]
+    # ── Parametreler ──────────────────────────────────────────────────────────
+    WAIT_SEC      = 10.0   # Başlangıç bekleme [s]
+    SCAN_WAIT     = 2.0    # LiDAR tarama süresi (robot durur) [s]
+    SCAN_HALF_DEG = 90.0   # Sadece ön ±90° taranır [°]
+    STOP_DIST     = 0.50   # Cismin önünde dur mesafesi [m]
+    GOAL_TOL      = 0.12   # Hedefe varış toleransı [m]
+    AT_GOAL_WAIT  = 3.0    # Hedefe varınca bekleme [s]
+
+    MAX_VEL       = 0.18   # Maksimum öteleme hızı [m/s]  (hw daha yavaş)
+    APPROACH_DIST = 0.80   # Bu mesafeden itibaren yavaşla [m]
+    APPROACH_VEL  = 0.05   # Yaklaşma minimum hızı [m/s]
+    KP            = 1.0    # Konum P katsayısı
 
     def __init__(self):
         super().__init__('omni_mission_hw')
 
-        self.x = 0.0; self.y = 0.0; self.yaw = 0.0
-        self.vx_body = 0.0; self.vy_body = 0.0
+        self.x   = 0.0
+        self.y   = 0.0
+        self.yaw = 0.0
 
-        self.home_x = 0.0; self.home_y = 0.0
+        self.home_x   = 0.0
+        self.home_y   = 0.0
         self.home_set = False
+        self.goal_x   = None
+        self.goal_y   = None
 
         self.scan: LaserScan = None
-        self.goal_x: float = None
-        self.goal_y: float = None
 
-        self.state = State.WAITING
+        self.state    = State.WAITING
         self.state_t0 = self.get_clock().now()
 
-        self.cx: np.ndarray = None
-        self.cy: np.ndarray = None
-        self.traj_T = 0.0
-        self.traj_t = 0.0
-
-        self._cmd = self.create_publisher(Twist, '/cmd_vel', 10)
+        self._pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.create_subscription(Odometry,  '/odom', self._odom_cb, 10)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, 10)
 
@@ -124,27 +102,33 @@ class OmniMissionHW(Node):
             1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         )
         if not self.home_set:
-            self.home_x = self.x
-            self.home_y = self.y
+            self.home_x   = self.x
+            self.home_y   = self.y
             self.home_set = True
-            self.get_logger().info(f'Ev konumu: ({self.x:.2f}, {self.y:.2f})')
+            self.get_logger().info(
+                f'Ev konumu kaydedildi: ({self.home_x:.2f}, {self.home_y:.2f})'
+            )
 
     def _scan_cb(self, msg: LaserScan):
         self.scan = msg
 
-    # ── Ana döngü ─────────────────────────────────────────────────────────────
+    # ── Ana kontrol döngüsü ───────────────────────────────────────────────────
 
     def _loop(self):
         if   self.state == State.WAITING:    self._st_waiting()
         elif self.state == State.SCANNING:   self._st_scanning()
-        elif self.state == State.NAVIGATING: self._st_nav(self.goal_x, self.goal_y, State.AT_GOAL)
+        elif self.state == State.NAVIGATING: self._st_nav(self.goal_x, self.goal_y,
+                                                           State.AT_GOAL)
         elif self.state == State.AT_GOAL:    self._st_at_goal()
-        elif self.state == State.RETURNING:  self._st_nav(self.home_x, self.home_y, State.DONE)
+        elif self.state == State.RETURNING:  self._st_nav(self.home_x, self.home_y,
+                                                           State.DONE)
         elif self.state == State.DONE:
             self._stop()
             self.get_logger().info('Gorev tamamlandi!', throttle_duration_sec=5.0)
 
-    # ── WAITING ───────────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # WAITING
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _st_waiting(self):
         kalan = self.WAIT_SEC - self._elapsed()
@@ -153,25 +137,25 @@ class OmniMissionHW(Node):
                 f'Baslamaya {kalan:.1f}s kaldi...',
                 throttle_duration_sec=2.0
             )
-        else:
-            self._stop()
-            self._set_state(State.SCANNING)
+            return
+        self._stop()
+        self._set_state(State.SCANNING)
 
-    # ── SCANNING – robot durur, sadece LiDAR okur ─────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # SCANNING – Robot durur, sadece LiDAR çalışır
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _st_scanning(self):
         self._stop()
 
         if self.scan is None:
             self.get_logger().warn(
-                'LiDAR verisi yok – LiDAR surucusu calisiyor mu?',
+                'LiDAR bekleniyor – surucusu calisiyor mu?',
                 throttle_duration_sec=1.0
             )
             return
 
-        gecen = self._elapsed()
-        kalan = self.SCAN_WAIT - gecen
-
+        kalan = self.SCAN_WAIT - self._elapsed()
         if kalan > 0:
             self.get_logger().info(
                 f'LiDAR taranıyor... {kalan:.1f}s',
@@ -180,24 +164,25 @@ class OmniMissionHW(Node):
             return
 
         # Ön ±SCAN_HALF_DEG içinde en yakın geçerli noktayı bul
-        half_rad = math.radians(self.SCAN_HALF_DEG)
-        best_r = float('inf')
+        half_rad   = math.radians(self.SCAN_HALF_DEG)
+        best_r     = float('inf')
         best_angle = 0.0
 
         angle = self.scan.angle_min
         for r in self.scan.ranges:
-            a_norm = (angle + math.pi) % (2 * math.pi) - math.pi
-            if (abs(a_norm) <= half_rad
-                    and not math.isinf(r) and not math.isnan(r)
+            a = (angle + math.pi) % (2 * math.pi) - math.pi
+            if (abs(a) <= half_rad
+                    and not math.isinf(r)
+                    and not math.isnan(r)
                     and self.scan.range_min < r < self.scan.range_max):
                 if r < best_r:
-                    best_r = r
+                    best_r     = r
                     best_angle = angle
             angle += self.scan.angle_increment
 
         if math.isinf(best_r):
             self.get_logger().warn(
-                'LiDAR gecerli okuma bulamadi, yeniden taranıyor...',
+                'On yarimkürede cisim bulunamadi, yeniden taranıyor...',
                 throttle_duration_sec=1.0
             )
             self.state_t0 = self.get_clock().now()
@@ -207,128 +192,111 @@ class OmniMissionHW(Node):
         obs_x = self.x + best_r * math.cos(world_angle)
         obs_y = self.y + best_r * math.sin(world_angle)
 
-        dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
-        reach = max(dist_to_obs - self.STOP_DIST, 0.10)
-        dx = (obs_x - self.x) / dist_to_obs
-        dy = (obs_y - self.y) / dist_to_obs
+        dist  = math.hypot(obs_x - self.x, obs_y - self.y)
+        reach = max(dist - self.STOP_DIST, 0.15)
+        dx = (obs_x - self.x) / dist
+        dy = (obs_y - self.y) / dist
 
         self.goal_x = self.x + reach * dx
         self.goal_y = self.y + reach * dy
 
         self.get_logger().info(
             f'\n-- LiDAR TARAMASI TAMAMLANDI --\n'
-            f'   En yakin cisim : {best_r:.2f}m, aci={math.degrees(best_angle):.1f} derece\n'
-            f'   Cisim koordinat: ({obs_x:.2f}, {obs_y:.2f})\n'
-            f'   Hedef (dur nok.): ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'   En yakin cisim : {best_r:.2f}m, aci = {math.degrees(best_angle):.1f} derece\n'
+            f'   Cisim (dunya)  : ({obs_x:.2f}, {obs_y:.2f})\n'
+            f'   Hedef          : ({self.goal_x:.2f}, {self.goal_y:.2f})\n'
+            f'   Kat edilecek   : {reach:.2f}m'
         )
-
-        self._plan_traj(self.goal_x, self.goal_y)
         self._set_state(State.NAVIGATING)
 
-    # ── NAVIGATING / RETURNING – düz git, kaçınma yok ────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # NAVIGATING / RETURNING – P kontrolcü, dönme yok
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _st_nav(self, gx: float, gy: float, next_state: State):
-        dist = math.hypot(gx - self.x, gy - self.y)
+        ex   = gx - self.x
+        ey   = gy - self.y
+        dist = math.hypot(ex, ey)
 
         if dist < self.GOAL_TOL:
             self._stop()
+            self.get_logger().info(
+                f'Hedefe ulasildi: ({gx:.2f}, {gy:.2f}) | '
+                f'hata = {dist*100:.1f}cm'
+            )
             self._set_state(next_state)
             return
 
-        if self.cx is None:
-            self._plan_traj(gx, gy)
+        vx_w = self.KP * ex
+        vy_w = self.KP * ey
 
-        t = min(self.traj_t, self.traj_T)
-        px, vx_w = quintic_eval(self.cx, t)
-        py, vy_w = quintic_eval(self.cy, t)
-
-        vx_cmd = vx_w + self.KP_POS * (px - self.x)
-        vy_cmd = vy_w + self.KP_POS * (py - self.y)
-
-        vx_b, vy_b = self._w2b(vx_cmd, vy_cmd)
+        spd   = math.hypot(vx_w, vy_w)
+        v_max = self.MAX_VEL
 
         if dist < self.APPROACH_DIST:
-            ratio = max(dist / self.APPROACH_DIST, 0.0)
-            v_limit = self.APPROACH_VEL + ratio * (self.MAX_VEL - self.APPROACH_VEL)
-            spd = math.hypot(vx_b, vy_b)
-            if spd > v_limit and spd > 1e-6:
-                vx_b *= v_limit / spd
-                vy_b *= v_limit / spd
+            ratio = dist / self.APPROACH_DIST
+            v_max = self.APPROACH_VEL + ratio * (self.MAX_VEL - self.APPROACH_VEL)
 
-        if dist > 0.3:
-            desired_yaw = math.atan2(gy - self.y, gx - self.x)
-            w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)
-        else:
-            w = 0.0
+        if spd > v_max:
+            scale = v_max / spd
+            vx_w *= scale
+            vy_w *= scale
 
-        self._pub(vx_b, vy_b, w)
-        self.traj_t += self._dt
+        c    = math.cos(self.yaw)
+        s    = math.sin(self.yaw)
+        vx_b =  c * vx_w + s * vy_w
+        vy_b = -s * vx_w + c * vy_w
 
-        if self.traj_t > self.traj_T + 0.5:
-            self._plan_traj(gx, gy)
+        self._publish(vx_b, vy_b, w=0.0)
 
-    # ── AT_GOAL ───────────────────────────────────────────────────────────────
+        self.get_logger().info(
+            f'-> hedef ({gx:.2f},{gy:.2f}) | '
+            f'dist={dist:.2f}m | '
+            f'v=({vx_b:.2f},{vy_b:.2f})',
+            throttle_duration_sec=0.5
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # AT_GOAL
+    # ══════════════════════════════════════════════════════════════════════════
 
     def _st_at_goal(self):
         self._stop()
         kalan = self.AT_GOAL_WAIT - self._elapsed()
         if kalan > 0:
             self.get_logger().info(
-                f'Hedefe ulasildi! {kalan:.1f}s sonra eve donus...',
+                f'Hedede bekleniyor. Eve donuse {kalan:.1f}s kaldi...',
                 throttle_duration_sec=1.0
             )
         else:
-            self.get_logger().info('Eve donus basliyor!')
-            self._plan_traj(self.home_x, self.home_y)
+            self.get_logger().info(
+                f'Eve donus basliyor -> ({self.home_x:.2f}, {self.home_y:.2f})'
+            )
             self._set_state(State.RETURNING)
 
-    # ── Yardımcılar ───────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # Yardımcılar
+    # ══════════════════════════════════════════════════════════════════════════
 
-    def _plan_traj(self, gx, gy):
-        dist = math.hypot(gx - self.x, gy - self.y)
-        T = max(dist / (self.MAX_VEL * 0.65), 1.5)
-        self.cx = quintic_coeffs(self.x, 0., 0., gx, 0., 0., T)
-        self.cy = quintic_coeffs(self.y, 0., 0., gy, 0., 0., T)
-        self.traj_T = T
-        self.traj_t = 0.0
-
-    def _w2b(self, wx, wy):
-        c, s = math.cos(self.yaw), math.sin(self.yaw)
-        return c * wx + s * wy, -s * wx + c * wy
-
-    def _adiff(self, a, b):
-        return (a - b + math.pi) % (2 * math.pi) - math.pi
-
-    def _pub(self, vx_b, vy_b, w):
-        spd = math.hypot(vx_b, vy_b)
-        if spd > self.MAX_VEL:
-            vx_b *= self.MAX_VEL / spd
-            vy_b *= self.MAX_VEL / spd
-        w = max(-self.MAX_ANG, min(self.MAX_ANG, w))
-        self.vx_body = vx_b
-        self.vy_body = vy_b
+    def _publish(self, vx_b: float, vy_b: float, w: float):
         msg = Twist()
         msg.linear.x  = vx_b
         msg.linear.y  = vy_b
         msg.angular.z = w
-        self._cmd.publish(msg)
+        self._pub_cmd.publish(msg)
 
     def _stop(self):
         try:
-            self._cmd.publish(Twist())
+            self._pub_cmd.publish(Twist())
         except Exception:
             pass
-        self.vx_body = 0.0
-        self.vy_body = 0.0
 
-    def _elapsed(self):
+    def _elapsed(self) -> float:
         return (self.get_clock().now() - self.state_t0).nanoseconds / 1e9
 
     def _set_state(self, s: State):
-        self.state = s
+        self.state    = s
         self.state_t0 = self.get_clock().now()
-        self.cx = None
-        self.cy = None
         self.get_logger().info(f'=== Durum: {s.name} ===')
 
 
