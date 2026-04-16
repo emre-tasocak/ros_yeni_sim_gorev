@@ -109,8 +109,8 @@ class OmniMissionHW(Node):
     KP_HDG          = 1.5    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.80   # Tehlike bölgesi mesafesi [m]
-    DANGER_HALF_DEG  = 35.0   # Tehlike konisi yarı açısı [°]
+    DANGER_DIST      = 0.45   # Tehlike bölgesi mesafesi [m]
+    DANGER_HALF_DEG  = 20.0   # Tehlike konisi yarı açısı [°]
     AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
     AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
 
@@ -230,47 +230,51 @@ class OmniMissionHW(Node):
             )
             return
 
-        min_r = float('inf')
-        min_angle = 0.0
+        best_r     = float('inf')
+        best_angle = 0.0
+        max_r      = -float('inf')
+        max_angle  = 0.0
+
         angle = self.scan.angle_min
         for r in self.scan.ranges:
             if not (math.isinf(r) or math.isnan(r)):
                 if self.scan.range_min < r < self.scan.range_max:
-                    if r < min_r:
-                        min_r = r
-                        min_angle = angle
+                    if r > max_r:
+                        max_r = r
+                        max_angle = angle
+                    if r > self.STOP_DIST + 0.2 and r < best_r:
+                        best_r = r
+                        best_angle = angle
             angle += self.scan.angle_increment
 
-        if math.isinf(min_r):
-            self.get_logger().warn(
-                'Hic engel algilanamadi, yeniden taranıyor...',
-                throttle_duration_sec=1.0
-            )
+        if max_r < 0:
+            self.get_logger().warn('Hic engel algilanamadi, yeniden taranıyor...', throttle_duration_sec=1.0)
             return
 
-        world_angle = self.yaw + min_angle
-        obs_x = self.x + min_r * math.cos(world_angle)
-        obs_y = self.y + min_r * math.sin(world_angle)
+        if math.isinf(best_r):
+            self.get_logger().warn(
+                f'Tum engeller {self.STOP_DIST}m icinde! En acik yon hedefleniyor...',
+                throttle_duration_sec=1.0
+            )
+            best_r     = max_r
+            best_angle = max_angle
 
+        world_angle = self.yaw + best_angle
+        obs_x = self.x + best_r * math.cos(world_angle)
+        obs_y = self.y + best_r * math.sin(world_angle)
         dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
-
-        if dist_to_obs <= self.STOP_DIST + 0.1:
-            self.get_logger().warn(
-                f'Engel cok yakin ({dist_to_obs:.2f}m), daha uzak engel aranıyor...',
-                throttle_duration_sec=1.0
-            )
-            return
 
         dx = (obs_x - self.x) / dist_to_obs
         dy = (obs_y - self.y) / dist_to_obs
-        self.goal_x = obs_x - self.STOP_DIST * dx
-        self.goal_y = obs_y - self.STOP_DIST * dy
+        reach = max(dist_to_obs - self.STOP_DIST, 0.15)
+        self.goal_x = self.x + reach * dx
+        self.goal_y = self.y + reach * dy
 
         self.get_logger().info(
             f'\n-- LiDAR TARAMASI TAMAMLANDI --\n'
-            f'   En yakin engel : {min_r:.2f}m, aci={math.degrees(min_angle):.1f} derece\n'
-            f'   Engel dunya konum : ({obs_x:.2f}, {obs_y:.2f})\n'
-            f'   Hedef (1m onu)    : ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'   Secilen engel  : {best_r:.2f}m, aci={math.degrees(best_angle):.1f} derece\n'
+            f'   Engel konum    : ({obs_x:.2f}, {obs_y:.2f})\n'
+            f'   Hedef (dur nok): ({self.goal_x:.2f}, {self.goal_y:.2f})'
         )
 
         self._plan_traj(self.goal_x, self.goal_y, 0., 0., 0., 0.)
