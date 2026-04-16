@@ -35,7 +35,7 @@ mkdir -p ~/ros2_ws
 cd ~/ros2_ws
 git clone https://github.com/emre-tasocak/ROS.git src
 cd ~/ros2_ws
-colcon build --symlink-install
+colcon build --symlink-install --packages-select omni_robot omni_robot_sim omni_mission
 source install/setup.bash
 ```
 
@@ -44,7 +44,7 @@ source install/setup.bash
 cd ~/ros2_ws/src
 git pull
 cd ~/ros2_ws
-colcon build --symlink-install
+colcon build --symlink-install --packages-select omni_robot omni_robot_sim omni_mission
 source install/setup.bash
 ```
 
