@@ -29,10 +29,21 @@ sudo apt install -y \
 
 ### Klonlama ve Derleme
 
+**Yeni kurulum (robota ilk kez yüklerken):**
 ```bash
-mkdir -p ~/ros2_ws/src
+mkdir -p ~/ros2_ws
 cd ~/ros2_ws
 git clone https://github.com/emre-tasocak/ROS.git src
+cd ~/ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+```
+
+**Güncelleme (zaten klonlanmışsa):**
+```bash
+cd ~/ros2_ws/src
+git pull
+cd ~/ros2_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
