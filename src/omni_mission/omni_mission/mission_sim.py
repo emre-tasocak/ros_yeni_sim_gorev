@@ -65,15 +65,16 @@ class OmniMissionSim(Node):
 
     WAIT_SEC     = 10.0   # başlangıç bekleme [s]
     SCAN_WAIT    = 2.0    # tarama süresi – robot durur [s]
-    STOP_DIST    = 1.0    # cismin önünde dur mesafesi [m]
-    GOAL_TOL     = 0.20   # hedefe varış toleransı [m]
+    STOP_DIST    = 0.50   # cismin önünde dur mesafesi [m]
+    SCAN_HALF_DEG = 90.0  # sadece ön ±90° taranır (arkadaki duvarlar yok sayılır)
+    GOAL_TOL     = 0.15   # hedefe varış toleransı [m]
     AT_GOAL_WAIT = 3.0    # hedefe varınca bekleme [s]
     MAX_VEL      = 0.22   # maksimum hız [m/s]
     MAX_ANG      = 1.0    # maksimum açısal hız [rad/s]
     KP_POS       = 1.5    # konum P katsayısı
     KP_HDG       = 1.2    # yön P katsayısı
-    APPROACH_DIST = 1.0   # yaklaşma yavaşlama mesafesi [m]
-    APPROACH_VEL  = 0.10  # yaklaşma minimum hızı [m/s]
+    APPROACH_DIST = 0.6   # yaklaşma yavaşlama mesafesi [m]
+    APPROACH_VEL  = 0.08  # yaklaşma minimum hızı [m/s]
 
     def __init__(self):
         super().__init__('omni_mission_sim')
@@ -175,14 +176,17 @@ class OmniMissionSim(Node):
             )
             return
 
-        # Tarama tamamlandı – en yakın geçerli noktayı bul
-        # LiDAR range_min=0.28m olduğundan kendi gövdesi/tekerleri zaten filtrelenmiş
+        # Tarama tamamlandı – ön ±SCAN_HALF_DEG içinde en yakın geçerli noktayı bul
+        # LiDAR range_min=0.28m olduğundan kendi gövde+tekerlerini zaten filtreliyor
+        half_rad = math.radians(self.SCAN_HALF_DEG)
         best_r = float('inf')
         best_angle = 0.0
 
         angle = self.scan.angle_min
         for r in self.scan.ranges:
-            if (not math.isinf(r) and not math.isnan(r)
+            a_norm = (angle + math.pi) % (2 * math.pi) - math.pi
+            if (abs(a_norm) <= half_rad
+                    and not math.isinf(r) and not math.isnan(r)
                     and self.scan.range_min < r < self.scan.range_max):
                 if r < best_r:
                     best_r = r
@@ -314,7 +318,10 @@ class OmniMissionSim(Node):
         self._cmd.publish(msg)
 
     def _stop(self):
-        self._cmd.publish(Twist())
+        try:
+            self._cmd.publish(Twist())
+        except Exception:
+            pass
         self.vx_body = 0.0
         self.vy_body = 0.0
 
