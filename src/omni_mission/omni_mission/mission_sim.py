@@ -104,10 +104,11 @@ class OmniMissionSim(Node):
     KP_HDG          = 1.2    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.65   # Tehlike bölgesi mesafesi [m]  (range_min=0.28 ile güvenli)
-    DANGER_HALF_DEG  = 30.0   # Tehlike konisi yarı açısı [°] (dönüşte daha geniş alan)
-    AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
-    AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
+    DANGER_DIST      = 0.50   # Tehlike bölgesi mesafesi [m]
+    DANGER_HALF_DEG  = 25.0   # Tehlike konisi yarı açısı [°]
+    AVOID_OFFSET     = 0.65   # Yana kayma miktarı [m]  (daha geniş → engeli geç)
+    AVOID_MIN_T      = 1.0    # Kaçınma quintic minimum süresi [s]
+    AVOID_COOLDOWN   = 3.0    # Kaçınma sonrası bekleme süresi [s] (tekrar tetiklenmeyi önler)
 
     def __init__(self):
         super().__init__('omni_mission_sim')
@@ -145,6 +146,7 @@ class OmniMissionSim(Node):
         self.avoid_t     = 0.0
         self.saved_goal_x: float = None   # kaçınma sırasında asıl hedef
         self.saved_goal_y: float = None
+        self.avoid_cooldown = 0.0         # kaçınma sonrası engel kontrol bekleme [s]
 
         # ── ROS2 arayüzleri ────────────────────────────────────────────────
         self._cmd = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -355,11 +357,16 @@ class OmniMissionSim(Node):
             self._exec_avoidance(gx, gy)
             return
 
-        # ── Engel kontrolü ────────────────────────────────────────────────
-        obs = self._check_obstacle()
-        if obs is not None:
-            self._start_avoidance(obs, gx, gy)
-            return
+        # ── Kaçınma cooldown: yeni kaçınmayı engelle ──────────────────────
+        if self.avoid_cooldown > 0.0:
+            self.avoid_cooldown -= self._dt
+            # Cooldown sırasında normal yörünge takibi yap (kontrol aşağıda devam eder)
+        else:
+            # ── Engel kontrolü ────────────────────────────────────────────
+            obs = self._check_obstacle()
+            if obs is not None:
+                self._start_avoidance(obs, gx, gy)
+                return
 
         # ── Normal quintic yörünge takibi ─────────────────────────────────
         if self.cx is None:
@@ -489,6 +496,7 @@ class OmniMissionSim(Node):
             vy0_w = math.sin(self.yaw) * self.vx_body + math.cos(self.yaw) * self.vy_body
             self._plan_traj(gx, gy, vx0_w, vy0_w, 0., 0.)
             self.avoiding = False
+            self.avoid_cooldown = self.AVOID_COOLDOWN   # yeni kaçınmayı 3 s erteле
 
     # ══════════════════════════════════════════════════════════════════════
     # Durum: AT_GOAL

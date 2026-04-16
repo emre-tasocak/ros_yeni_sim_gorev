@@ -111,10 +111,11 @@ class OmniMissionHW(Node):
     KP_HDG          = 1.2    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.65   # Tehlike bölgesi mesafesi [m]
-    DANGER_HALF_DEG  = 30.0   # Tehlike konisi yarı açısı [°]
-    AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
-    AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
+    DANGER_DIST      = 0.50   # Tehlike bölgesi mesafesi [m]
+    DANGER_HALF_DEG  = 25.0   # Tehlike konisi yarı açısı [°]
+    AVOID_OFFSET     = 0.65   # Yana kayma miktarı [m]
+    AVOID_MIN_T      = 1.0    # Kaçınma quintic minimum süresi [s]
+    AVOID_COOLDOWN   = 3.0    # Kaçınma sonrası bekleme süresi [s]
 
     def __init__(self):
         super().__init__('omni_mission_hw')
@@ -152,6 +153,7 @@ class OmniMissionHW(Node):
         self.avoid_t     = 0.0
         self.saved_goal_x: float = None
         self.saved_goal_y: float = None
+        self.avoid_cooldown = 0.0         # kaçınma sonrası engel kontrol bekleme [s]
 
         # ── ROS2 arayüzleri ────────────────────────────────────────────────
         self._cmd = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -357,10 +359,15 @@ class OmniMissionHW(Node):
             self._exec_avoidance(gx, gy)
             return
 
-        obs = self._check_obstacle()
-        if obs is not None:
-            self._start_avoidance(obs, gx, gy)
-            return
+        # ── Kaçınma cooldown: yeni kaçınmayı engelle ──────────────────────
+        if self.avoid_cooldown > 0.0:
+            self.avoid_cooldown -= self._dt
+            # Cooldown sırasında normal yörünge takibi yap (kontrol aşağıda devam eder)
+        else:
+            obs = self._check_obstacle()
+            if obs is not None:
+                self._start_avoidance(obs, gx, gy)
+                return
 
         if self.cx is None:
             self._plan_traj(gx, gy, 0., 0., 0., 0.)
@@ -471,6 +478,7 @@ class OmniMissionHW(Node):
             vy0_w = math.sin(self.yaw) * self.vx_body + math.cos(self.yaw) * self.vy_body
             self._plan_traj(gx, gy, vx0_w, vy0_w, 0., 0.)
             self.avoiding = False
+            self.avoid_cooldown = self.AVOID_COOLDOWN   # yeni kaçınmayı 3 s ertele
 
     # ══════════════════════════════════════════════════════════════════════
     # Durum: AT_GOAL
