@@ -93,17 +93,19 @@ class OmniMissionSim(Node):
 
     # ── Görev parametreleri ────────────────────────────────────────────────
     WAIT_SEC        = 10.0   # Başlangıç bekleme süresi [s]
-    STOP_DIST       = 1.0    # Hedefe dur mesafesi [m]
-    GOAL_TOL        = 0.12   # Hedefe varış toleransı [m]
+    STOP_DIST       = 1.2    # Hedefe dur mesafesi [m]  (1.0 → 1.2: daha fazla marj)
+    GOAL_TOL        = 0.20   # Hedefe varış toleransı [m] (0.12 → 0.20: erken dur)
+    APPROACH_DIST   = 1.0    # Bu mesafeden sonra yavaşla [m]
+    APPROACH_VEL    = 0.10   # Yaklaşma hızı [m/s]
     AT_GOAL_WAIT    = 3.0    # Hedefe varınca bekleme [s]
-    MAX_VEL         = 0.25   # Maksimum doğrusal hız [m/s]
-    MAX_ANG         = 1.2    # Maksimum açısal hız [rad/s]
-    KP_POS          = 1.8    # Konum PD katsayısı
-    KP_HDG          = 1.5    # Yön PD katsayısı
+    MAX_VEL         = 0.22   # Maksimum doğrusal hız [m/s]
+    MAX_ANG         = 1.0    # Maksimum açısal hız [rad/s]
+    KP_POS          = 1.5    # Konum PD katsayısı
+    KP_HDG          = 1.2    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.45   # Tehlike bölgesi mesafesi [m]  (eski: 0.80)
-    DANGER_HALF_DEG  = 20.0   # Tehlike konisi yarı açısı [°] (eski: 35.0)
+    DANGER_DIST      = 0.65   # Tehlike bölgesi mesafesi [m]  (range_min=0.28 ile güvenli)
+    DANGER_HALF_DEG  = 30.0   # Tehlike konisi yarı açısı [°] (dönüşte daha geniş alan)
     AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
     AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
 
@@ -318,7 +320,17 @@ class OmniMissionSim(Node):
         # Dünya → gövde çerçevesi
         vx_b, vy_b = self._w2b(vx_cmd, vy_cmd)
 
-        # Yön kontrolü – yalnızca hedefe 0.3m'den yakınsa hizala
+        # ── Yaklaşma yavaşlaması ───────────────────────────────────────────
+        # Hedefe APPROACH_DIST m kala hızı doğrusal olarak APPROACH_VEL'e indir
+        if dist < self.APPROACH_DIST:
+            ratio = max(dist / self.APPROACH_DIST, 0.0)
+            v_limit = self.APPROACH_VEL + ratio * (self.MAX_VEL - self.APPROACH_VEL)
+            spd = math.hypot(vx_b, vy_b)
+            if spd > v_limit and spd > 1e-6:
+                vx_b *= v_limit / spd
+                vy_b *= v_limit / spd
+
+        # Yön kontrolü – yalnızca hedefe 0.3m'den uzakta hizala
         if dist > 0.3:
             desired_yaw = math.atan2(gy - self.y, gx - self.x)
             w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)

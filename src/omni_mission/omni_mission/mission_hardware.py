@@ -100,17 +100,19 @@ class OmniMissionHW(Node):
 
     # ── Görev parametreleri ────────────────────────────────────────────────
     WAIT_SEC        = 10.0   # Başlangıç bekleme süresi [s]
-    STOP_DIST       = 1.0    # Hedefe dur mesafesi [m]
-    GOAL_TOL        = 0.12   # Hedefe varış toleransı [m]
+    STOP_DIST       = 1.2    # Hedefe dur mesafesi [m]
+    GOAL_TOL        = 0.20   # Hedefe varış toleransı [m]
+    APPROACH_DIST   = 1.0    # Bu mesafeden sonra yavaşla [m]
+    APPROACH_VEL    = 0.08   # Yaklaşma hızı [m/s]
     AT_GOAL_WAIT    = 3.0    # Hedefe varınca bekleme [s]
-    MAX_VEL         = 0.20   # Maks doğrusal hız [m/s]  ← gerçek robot için daha düşük
-    MAX_ANG         = 1.0    # Maks açısal hız [rad/s]
-    KP_POS          = 1.8    # Konum PD katsayısı
-    KP_HDG          = 1.5    # Yön PD katsayısı
+    MAX_VEL         = 0.18   # Maks doğrusal hız [m/s]
+    MAX_ANG         = 0.9    # Maks açısal hız [rad/s]
+    KP_POS          = 1.5    # Konum PD katsayısı
+    KP_HDG          = 1.2    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.45   # Tehlike bölgesi mesafesi [m]
-    DANGER_HALF_DEG  = 20.0   # Tehlike konisi yarı açısı [°]
+    DANGER_DIST      = 0.65   # Tehlike bölgesi mesafesi [m]
+    DANGER_HALF_DEG  = 30.0   # Tehlike konisi yarı açısı [°]
     AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
     AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
 
@@ -313,11 +315,20 @@ class OmniMissionHW(Node):
 
         vx_b, vy_b = self._w2b(vx_cmd, vy_cmd)
 
-        if math.hypot(vx_w, vy_w) > 0.02:
-            desired_yaw = math.atan2(vy_w, vx_w)
-        else:
+        # ── Yaklaşma yavaşlaması ──────────────────────────────────────────
+        if dist < self.APPROACH_DIST:
+            ratio = max(dist / self.APPROACH_DIST, 0.0)
+            v_limit = self.APPROACH_VEL + ratio * (self.MAX_VEL - self.APPROACH_VEL)
+            spd = math.hypot(vx_b, vy_b)
+            if spd > v_limit and spd > 1e-6:
+                vx_b *= v_limit / spd
+                vy_b *= v_limit / spd
+
+        if dist > 0.3:
             desired_yaw = math.atan2(gy - self.y, gx - self.x)
-        w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)
+            w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)
+        else:
+            w = 0.0
 
         self._pub(vx_b, vy_b, w)
         self.traj_t += self._dt
