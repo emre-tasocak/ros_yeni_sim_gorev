@@ -102,8 +102,8 @@ class OmniMissionSim(Node):
     KP_HDG          = 1.5    # Yön PD katsayısı
 
     # ── Engel kaçınma parametreleri ────────────────────────────────────────
-    DANGER_DIST      = 0.80   # Tehlike bölgesi mesafesi [m]
-    DANGER_HALF_DEG  = 35.0   # Tehlike konisi yarı açısı [°]
+    DANGER_DIST      = 0.45   # Tehlike bölgesi mesafesi [m]  (eski: 0.80)
+    DANGER_HALF_DEG  = 20.0   # Tehlike konisi yarı açısı [°] (eski: 35.0)
     AVOID_OFFSET     = 0.55   # Yana kayma miktarı [m]
     AVOID_MIN_T      = 0.8    # Kaçınma quintic minimum süresi [s]
 
@@ -219,47 +219,60 @@ class OmniMissionSim(Node):
             self.get_logger().warn('LiDAR verisi yok, bekleniyor...', throttle_duration_sec=1.0)
             return
 
-        # Tüm 360°'deki en yakın noktayı bul
-        min_r = float('inf')
-        min_angle = 0.0
+        # ── En yakın VE ulaşılabilir engeli bul ───────────────────────────
+        # Ulaşılabilir = robot ile engel arasında STOP_DIST kadar boşluk var
+        best_r     = float('inf')
+        best_angle = 0.0
+        max_r      = -float('inf')
+        max_angle  = 0.0
+
         angle = self.scan.angle_min
         for r in self.scan.ranges:
             if not (math.isinf(r) or math.isnan(r)):
                 if self.scan.range_min < r < self.scan.range_max:
-                    if r < min_r:
-                        min_r = r
-                        min_angle = angle
+                    # Yedek: alan içinde en uzak nokta
+                    if r > max_r:
+                        max_r = r
+                        max_angle = angle
+                    # STOP_DIST'ten daha uzaktaki en yakın engel
+                    if r > self.STOP_DIST + 0.2 and r < best_r:
+                        best_r = r
+                        best_angle = angle
             angle += self.scan.angle_increment
 
-        if math.isinf(min_r):
+        # Hiç geçerli engel yoksa
+        if max_r < 0:
             self.get_logger().warn('Hiç engel algılanamadı, yeniden taranıyor...', throttle_duration_sec=1.0)
             return
 
-        # LiDAR açısını robot gövde çerçevesinden dünya çerçevesine çevir
-        world_angle = self.yaw + min_angle
-        obs_x = self.x + min_r * math.cos(world_angle)
-        obs_y = self.y + min_r * math.sin(world_angle)
-
-        dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
-
-        if dist_to_obs <= self.STOP_DIST + 0.1:
+        # STOP_DIST'ten uzak engel bulunamadıysa → en uzak noktayı hedef al
+        if math.isinf(best_r):
             self.get_logger().warn(
-                f'Engel çok yakın ({dist_to_obs:.2f}m ≤ {self.STOP_DIST}m), '
-                'daha uzak engel aranıyor...', throttle_duration_sec=1.0
+                f'Tüm engeller {self.STOP_DIST}m içinde! '
+                f'En açık yön ({math.degrees(max_angle):.0f}°) hedefleniyor...',
+                throttle_duration_sec=1.0
             )
-            return
+            best_r     = max_r
+            best_angle = max_angle
+
+        # LiDAR açısını dünya çerçevesine çevir
+        world_angle = self.yaw + best_angle
+        obs_x = self.x + best_r * math.cos(world_angle)
+        obs_y = self.y + best_r * math.sin(world_angle)
+        dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
 
         # Hedef: engelden STOP_DIST metre önce
         dx = (obs_x - self.x) / dist_to_obs
         dy = (obs_y - self.y) / dist_to_obs
-        self.goal_x = obs_x - self.STOP_DIST * dx
-        self.goal_y = obs_y - self.STOP_DIST * dy
+        reach = max(dist_to_obs - self.STOP_DIST, 0.15)   # en az 15 cm git
+        self.goal_x = self.x + reach * dx
+        self.goal_y = self.y + reach * dy
 
         self.get_logger().info(
             f'\n── LiDAR TARAMASI TAMAMLANDI ──\n'
-            f'   En yakın engel : {min_r:.2f}m, açı={math.degrees(min_angle):.1f}°\n'
-            f'   Engel dünya konum : ({obs_x:.2f}, {obs_y:.2f})\n'
-            f'   Hedef (1m önü)    : ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'   Seçilen engel  : {best_r:.2f}m, açı={math.degrees(best_angle):.1f}°\n'
+            f'   Engel konum    : ({obs_x:.2f}, {obs_y:.2f})\n'
+            f'   Hedef (dur nok): ({self.goal_x:.2f}, {self.goal_y:.2f})'
         )
 
         # Quintic yörünge planla (sıfır başlangıç hız/ivmesiyle)
