@@ -32,7 +32,7 @@ sudo apt install -y \
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws
-git clone https://github.com/KULLANICI_ADINIZ/omni_robot_ws.git src
+git clone https://github.com/emre-tasocak/ROS.git src
 colcon build --symlink-install
 source install/setup.bash
 ```
