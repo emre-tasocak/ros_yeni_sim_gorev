@@ -318,12 +318,12 @@ class OmniMissionSim(Node):
         # Dünya → gövde çerçevesi
         vx_b, vy_b = self._w2b(vx_cmd, vy_cmd)
 
-        # Yön kontrolü
-        if math.hypot(vx_w, vy_w) > 0.02:
-            desired_yaw = math.atan2(vy_w, vx_w)
-        else:
+        # Yön kontrolü – yalnızca hedefe 0.3m'den yakınsa hizala
+        if dist > 0.3:
             desired_yaw = math.atan2(gy - self.y, gx - self.x)
-        w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)
+            w = self.KP_HDG * self._adiff(desired_yaw, self.yaw)
+        else:
+            w = 0.0   # çok yakında dönme, sadece konuma git
 
         self._pub(vx_b, vy_b, w)
         self.traj_t += self._dt
