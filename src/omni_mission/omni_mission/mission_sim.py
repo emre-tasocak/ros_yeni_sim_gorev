@@ -221,65 +221,121 @@ class OmniMissionSim(Node):
             self.get_logger().warn('LiDAR verisi yok, bekleniyor...', throttle_duration_sec=1.0)
             return
 
-        # ── En yakın VE ulaşılabilir engeli bul ───────────────────────────
-        # Ulaşılabilir = robot ile engel arasında STOP_DIST kadar boşluk var
-        best_r     = float('inf')
-        best_angle = 0.0
-        max_r      = -float('inf')
-        max_angle  = 0.0
+        result = self._cluster_scan()
+        if result is None:
+            return   # _cluster_scan zaten uyarı loguyor
 
-        angle = self.scan.angle_min
-        for r in self.scan.ranges:
-            if not (math.isinf(r) or math.isnan(r)):
-                if self.scan.range_min < r < self.scan.range_max:
-                    # Yedek: alan içinde en uzak nokta
-                    if r > max_r:
-                        max_r = r
-                        max_angle = angle
-                    # STOP_DIST'ten daha uzaktaki en yakın engel
-                    if r > self.STOP_DIST + 0.2 and r < best_r:
-                        best_r = r
-                        best_angle = angle
-            angle += self.scan.angle_increment
+        avg_r, avg_angle, n_pts, n_total = result
 
-        # Hiç geçerli engel yoksa
-        if max_r < 0:
-            self.get_logger().warn('Hiç engel algılanamadı, yeniden taranıyor...', throttle_duration_sec=1.0)
-            return
-
-        # STOP_DIST'ten uzak engel bulunamadıysa → en uzak noktayı hedef al
-        if math.isinf(best_r):
-            self.get_logger().warn(
-                f'Tüm engeller {self.STOP_DIST}m içinde! '
-                f'En açık yön ({math.degrees(max_angle):.0f}°) hedefleniyor...',
-                throttle_duration_sec=1.0
-            )
-            best_r     = max_r
-            best_angle = max_angle
-
-        # LiDAR açısını dünya çerçevesine çevir
-        world_angle = self.yaw + best_angle
-        obs_x = self.x + best_r * math.cos(world_angle)
-        obs_y = self.y + best_r * math.sin(world_angle)
+        world_angle = self.yaw + avg_angle
+        obs_x = self.x + avg_r * math.cos(world_angle)
+        obs_y = self.y + avg_r * math.sin(world_angle)
         dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
 
-        # Hedef: engelden STOP_DIST metre önce
         dx = (obs_x - self.x) / dist_to_obs
         dy = (obs_y - self.y) / dist_to_obs
-        reach = max(dist_to_obs - self.STOP_DIST, 0.15)   # en az 15 cm git
+        reach = max(dist_to_obs - self.STOP_DIST, 0.15)
         self.goal_x = self.x + reach * dx
         self.goal_y = self.y + reach * dy
 
         self.get_logger().info(
-            f'\n── LiDAR TARAMASI TAMAMLANDI ──\n'
-            f'   Seçilen engel  : {best_r:.2f}m, açı={math.degrees(best_angle):.1f}°\n'
-            f'   Engel konum    : ({obs_x:.2f}, {obs_y:.2f})\n'
-            f'   Hedef (dur nok): ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'\n── LiDAR TARAMASI – KÜMELEME SONUCU ──\n'
+            f'   Toplam küme      : {n_total}\n'
+            f'   Seçilen obje     : {n_pts} LiDAR noktası\n'
+            f'   Mesafe / açı     : {avg_r:.2f}m, {math.degrees(avg_angle):.1f}°\n'
+            f'   Engel koordinat  : ({obs_x:.2f}, {obs_y:.2f})\n'
+            f'   Hedef (dur nok.) : ({self.goal_x:.2f}, {self.goal_y:.2f})'
         )
 
-        # Quintic yörünge planla (sıfır başlangıç hız/ivmesiyle)
         self._plan_traj(self.goal_x, self.goal_y, 0., 0., 0., 0.)
         self._set_state(State.NAVIGATING)
+
+    def _cluster_scan(self):
+        """
+        LiDAR taramasını Kartezyen mesafe eşiğiyle kümelere ayır.
+
+        Duvarlar → çok sayıda ardışık nokta (büyük küme)
+        Objeler  → az sayıda ardışık nokta  (küçük küme)
+
+        En az noktalı küme seçilir → en küçük obje.
+
+        Dönüş: (ort_mesafe, ort_açı, nokta_sayısı, toplam_küme) veya None
+        """
+        GAP_M    = 0.35   # İki ardışık nokta arası maks Kartezyen mesafe [m]
+        MIN_PTS  = 2      # Geçerli küme için minimum nokta sayısı
+        MAX_PTS  = 50     # Bu kadar veya daha fazla nokta = duvar (filtrele)
+
+        ranges    = self.scan.ranges
+        a_min     = self.scan.angle_min
+        a_inc     = self.scan.angle_increment
+        r_min_lim = self.scan.range_min
+        r_max_lim = self.scan.range_max
+
+        clusters: list = []
+        cur:      list = []
+
+        for i, r in enumerate(ranges):
+            angle = a_min + i * a_inc
+            valid = (
+                not math.isinf(r) and not math.isnan(r)
+                and r_min_lim < r < r_max_lim
+            )
+
+            if not valid:
+                if len(cur) >= MIN_PTS:
+                    clusters.append(cur)
+                cur = []
+                continue
+
+            if cur:
+                pr, pa = cur[-1]
+                dx = r * math.cos(angle) - pr * math.cos(pa)
+                dy = r * math.sin(angle) - pr * math.sin(pa)
+                if math.hypot(dx, dy) > GAP_M:
+                    if len(cur) >= MIN_PTS:
+                        clusters.append(cur)
+                    cur = []
+
+            cur.append((r, angle))
+
+        if len(cur) >= MIN_PTS:
+            clusters.append(cur)
+
+        # Duvarları çıkar: MAX_PTS'ten fazla noktalı kümeler duvar sayılır
+        obj_clusters = [c for c in clusters if len(c) <= MAX_PTS]
+
+        if not obj_clusters:
+            self.get_logger().warn(
+                f'Obje kümesi bulunamadı '
+                f'({len(clusters)} küme var, hepsi duvar eşiğini ({MAX_PTS} nokta) aşıyor).',
+                throttle_duration_sec=1.0
+            )
+            return None
+
+        # En az noktalı küme = en küçük obje
+        best = min(obj_clusters, key=len)
+        avg_r     = sum(p[0] for p in best) / len(best)
+        avg_angle = sum(p[1] for p in best) / len(best)
+
+        # STOP_DIST içindeyse bu küme zaten çok yakın, atla
+        if avg_r <= self.STOP_DIST:
+            self.get_logger().warn(
+                f'En küçük obje çok yakın ({avg_r:.2f}m ≤ {self.STOP_DIST}m), atlanıyor.',
+                throttle_duration_sec=1.0
+            )
+            # Bir sonraki en küçük objeyi dene
+            remaining = sorted(obj_clusters, key=len)
+            for cand in remaining[1:]:
+                cr = sum(p[0] for p in cand) / len(cand)
+                ca = sum(p[1] for p in cand) / len(cand)
+                if cr > self.STOP_DIST:
+                    avg_r, avg_angle = cr, ca
+                    best = cand
+                    break
+            else:
+                return None
+
+        return avg_r, avg_angle, len(best), len(clusters)
 
     # ══════════════════════════════════════════════════════════════════════
     # Durum: NAVIGATING / RETURNING – quintic + dinamik kaçınma

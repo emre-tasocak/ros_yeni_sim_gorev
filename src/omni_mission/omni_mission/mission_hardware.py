@@ -232,38 +232,15 @@ class OmniMissionHW(Node):
             )
             return
 
-        best_r     = float('inf')
-        best_angle = 0.0
-        max_r      = -float('inf')
-        max_angle  = 0.0
-
-        angle = self.scan.angle_min
-        for r in self.scan.ranges:
-            if not (math.isinf(r) or math.isnan(r)):
-                if self.scan.range_min < r < self.scan.range_max:
-                    if r > max_r:
-                        max_r = r
-                        max_angle = angle
-                    if r > self.STOP_DIST + 0.2 and r < best_r:
-                        best_r = r
-                        best_angle = angle
-            angle += self.scan.angle_increment
-
-        if max_r < 0:
-            self.get_logger().warn('Hic engel algilanamadi, yeniden taranıyor...', throttle_duration_sec=1.0)
+        result = self._cluster_scan()
+        if result is None:
             return
 
-        if math.isinf(best_r):
-            self.get_logger().warn(
-                f'Tum engeller {self.STOP_DIST}m icinde! En acik yon hedefleniyor...',
-                throttle_duration_sec=1.0
-            )
-            best_r     = max_r
-            best_angle = max_angle
+        avg_r, avg_angle, n_pts, n_total = result
 
-        world_angle = self.yaw + best_angle
-        obs_x = self.x + best_r * math.cos(world_angle)
-        obs_y = self.y + best_r * math.sin(world_angle)
+        world_angle = self.yaw + avg_angle
+        obs_x = self.x + avg_r * math.cos(world_angle)
+        obs_y = self.y + avg_r * math.sin(world_angle)
         dist_to_obs = math.hypot(obs_x - self.x, obs_y - self.y)
 
         dx = (obs_x - self.x) / dist_to_obs
@@ -273,14 +250,96 @@ class OmniMissionHW(Node):
         self.goal_y = self.y + reach * dy
 
         self.get_logger().info(
-            f'\n-- LiDAR TARAMASI TAMAMLANDI --\n'
-            f'   Secilen engel  : {best_r:.2f}m, aci={math.degrees(best_angle):.1f} derece\n'
-            f'   Engel konum    : ({obs_x:.2f}, {obs_y:.2f})\n'
-            f'   Hedef (dur nok): ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'\n-- LiDAR TARAMASI – KUMELEME SONUCU --\n'
+            f'   Toplam kume      : {n_total}\n'
+            f'   Secilen obje     : {n_pts} LiDAR noktasi\n'
+            f'   Mesafe / aci     : {avg_r:.2f}m, {math.degrees(avg_angle):.1f} derece\n'
+            f'   Engel koordinat  : ({obs_x:.2f}, {obs_y:.2f})\n'
+            f'   Hedef (dur nok.) : ({self.goal_x:.2f}, {self.goal_y:.2f})'
         )
 
         self._plan_traj(self.goal_x, self.goal_y, 0., 0., 0., 0.)
         self._set_state(State.NAVIGATING)
+
+    def _cluster_scan(self):
+        """
+        LiDAR taramasini Kartezyen mesafe esligiyle kumelere ayir.
+
+        Duvarlar -> cok sayida ardisik nokta (buyuk kume)
+        Objeler  -> az sayida ardisik nokta  (kucuk kume)
+
+        En az noktali kume secilir -> en kucuk obje.
+        """
+        GAP_M    = 0.35
+        MIN_PTS  = 2
+        MAX_PTS  = 50
+
+        ranges    = self.scan.ranges
+        a_min     = self.scan.angle_min
+        a_inc     = self.scan.angle_increment
+        r_min_lim = self.scan.range_min
+        r_max_lim = self.scan.range_max
+
+        clusters: list = []
+        cur:      list = []
+
+        for i, r in enumerate(ranges):
+            angle = a_min + i * a_inc
+            valid = (
+                not math.isinf(r) and not math.isnan(r)
+                and r_min_lim < r < r_max_lim
+            )
+
+            if not valid:
+                if len(cur) >= MIN_PTS:
+                    clusters.append(cur)
+                cur = []
+                continue
+
+            if cur:
+                pr, pa = cur[-1]
+                dx = r * math.cos(angle) - pr * math.cos(pa)
+                dy = r * math.sin(angle) - pr * math.sin(pa)
+                if math.hypot(dx, dy) > GAP_M:
+                    if len(cur) >= MIN_PTS:
+                        clusters.append(cur)
+                    cur = []
+
+            cur.append((r, angle))
+
+        if len(cur) >= MIN_PTS:
+            clusters.append(cur)
+
+        obj_clusters = [c for c in clusters if len(c) <= MAX_PTS]
+
+        if not obj_clusters:
+            self.get_logger().warn(
+                f'Obje kumesi bulunamadi ({len(clusters)} kume, hepsi duvar esigini asiyor).',
+                throttle_duration_sec=1.0
+            )
+            return None
+
+        best = min(obj_clusters, key=len)
+        avg_r     = sum(p[0] for p in best) / len(best)
+        avg_angle = sum(p[1] for p in best) / len(best)
+
+        if avg_r <= self.STOP_DIST:
+            self.get_logger().warn(
+                f'En kucuk obje cok yakin ({avg_r:.2f}m), atlanıyor.',
+                throttle_duration_sec=1.0
+            )
+            remaining = sorted(obj_clusters, key=len)
+            for cand in remaining[1:]:
+                cr = sum(p[0] for p in cand) / len(cand)
+                ca = sum(p[1] for p in cand) / len(cand)
+                if cr > self.STOP_DIST:
+                    avg_r, avg_angle = cr, ca
+                    best = cand
+                    break
+            else:
+                return None
+
+        return avg_r, avg_angle, len(best), len(clusters)
 
     # ══════════════════════════════════════════════════════════════════════
     # Durum: NAVIGATING / RETURNING
