@@ -757,12 +757,10 @@ class Roboclaw:
 		return self._write1(address,self.Cmd.SETMAXLB,val)
 
 	def SetM1VelocityPID(self,address,p,i,d,qpps):
-#		return self._write4444(address,self.Cmd.SETM1PID,long(d*65536),long(p*65536),long(i*65536),qpps)
-		return self._write4444(address,self.Cmd.SETM1PID,d*65536,p*65536,i*65536,qpps)
+		return self._write4444(address,self.Cmd.SETM1PID,int(d*65536),int(p*65536),int(i*65536),qpps)
 
 	def SetM2VelocityPID(self,address,p,i,d,qpps):
-#		return self._write4444(address,self.Cmd.SETM2PID,long(d*65536),long(p*65536),long(i*65536),qpps)
-		return self._write4444(address,self.Cmd.SETM2PID,d*65536,p*65536,i*65536,qpps)
+		return self._write4444(address,self.Cmd.SETM2PID,int(d*65536),int(p*65536),int(i*65536),qpps)
 
 	def ReadISpeedM1(self,address):
 		return self._read4_1(address,self.Cmd.GETM1ISPEED)
