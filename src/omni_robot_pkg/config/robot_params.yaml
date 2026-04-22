@@ -34,7 +34,7 @@
     lidar_frame_id: "laser"     # LiDAR TF çerçeve adı
 
     # ---- Güvenlik ----
-    obstacle_safety_radius: 0.50  # Engele minimum yaklaşma mesafesi (metre, robot merkezinden)
+    obstacle_safety_radius: 0.10  # Engele minimum yaklaşma mesafesi (metre, robot merkezinden)
 
     # ---- Navigasyon ----
     max_linear_velocity: 0.3      # Maksimum doğrusal hız (m/s)
@@ -50,8 +50,8 @@
     dwa_alpha: 1.5                # Hedef yön ağırlığı
     dwa_beta: 3.0                 # Engel mesafesi ağırlığı
     dwa_gamma: 0.3                # Hız büyüklüğü ağırlığı
-    dwa_min_clearance: 0.38       # DWA için minimum serbest mesafe (m)
-                                  # obstacle_safety_radius (0.50m) dan küçük olmalı:
+    dwa_min_clearance: 0.08       # DWA için minimum serbest mesafe (m)
+                                  # obstacle_safety_radius (0.10m) dan küçük olmalı:
                                   # robot sınırda durunca kaçış yolu bulabilsin
 
     # ---- Görev Parametreleri ----
