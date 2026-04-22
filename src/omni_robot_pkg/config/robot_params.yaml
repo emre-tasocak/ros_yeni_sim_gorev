@@ -15,8 +15,8 @@
 
     # ---- RoboClaw Motor Sürücüsü ----
     # Gerçek robot bağlantı noktaları (kullanılan portları kontrol edin)
-    roboclaw_port_1: "/dev/ttyAMA0"   # 1. RoboClaw (M1=Teker3, M2=Teker1)
-    roboclaw_port_2: "/dev/ttyAMA1"   # 2. RoboClaw (M2=Teker2)
+    roboclaw_port_1: "/dev/ttyAMA2"   # 1. RoboClaw (M1=Teker3, M2=Teker1)
+    roboclaw_port_2: "/dev/ttyAMA3"   # 2. RoboClaw (M2=Teker2)
     roboclaw_baudrate: 38400
     roboclaw_address_1: 128     # 0x80
     roboclaw_address_2: 129     # 0x81
