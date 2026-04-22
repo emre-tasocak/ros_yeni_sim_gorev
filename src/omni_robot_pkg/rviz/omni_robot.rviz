@@ -1,0 +1,54 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Color: 160; 160; 164
+      Cell Size: 0.5
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Plane: XY
+      Plane Cell Count: 20
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot Model
+      Enabled: true
+      Description Topic: /robot_description
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR (Ham)
+      Enabled: true
+      Topic: /scan
+      Color: 255; 100; 0
+      Size (m): 0.05
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR (Filtrelenmiş)
+      Enabled: true
+      Topic: /scan/filtered
+      Color: 0; 200; 0
+      Size (m): 0.05
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometri
+      Enabled: true
+      Topic: /odom
+      Keep: 200
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+  Value: true
+Views:
+  Current:
+    Class: rviz_default_plugins/TopDownOrtho
+    Name: Üstten Görünüm
+    Scale: 60
+    Target Frame: base_link
+    X: 0
+    Y: 0

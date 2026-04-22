@@ -1,0 +1,319 @@
+<?xml version="1.0"?>
+<!--
+  3-Tekerli Omni Robot URDF/Xacro — Gazebo Harmonic (ros2_control)
+
+  Hareket: gz_ros2_control + JointGroupVelocityController (3 teker eklemi)
+  LiDAR:   gpu_lidar sensörü → ros_gz_bridge ile /scan
+  IMU:     gz imu sensörü → ros_gz_bridge ile /imu
+-->
+<robot name="omni_robot" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ============================= -->
+  <!--         Parametreler          -->
+  <!-- ============================= -->
+  <xacro:property name="wheel_radius"  value="0.050"/>
+  <xacro:property name="wheel_width"   value="0.040"/>
+  <xacro:property name="wheel_base"    value="0.250"/>
+  <xacro:property name="base_radius"   value="0.150"/>
+  <xacro:property name="base_height"   value="0.120"/>
+  <xacro:property name="chassis_mass"  value="4.0"/>
+  <xacro:property name="wheel_mass"    value="0.3"/>
+  <xacro:property name="lidar_height"  value="0.100"/>
+  <xacro:property name="camera_x"      value="0.200"/>
+  <xacro:property name="camera_z"      value="0.060"/>
+  <!-- pi is a xacro built-in: ${pi} → 3.14159... (no need to redefine) -->
+
+  <!-- ============================= -->
+  <!--         Materyaller           -->
+  <!-- ============================= -->
+  <material name="dark_gray"><color rgba="0.2 0.2 0.2 1.0"/></material>
+  <material name="gray">     <color rgba="0.5 0.5 0.5 1.0"/></material>
+  <material name="blue">     <color rgba="0.0 0.0 0.8 1.0"/></material>
+  <material name="black">    <color rgba="0.0 0.0 0.0 1.0"/></material>
+  <material name="red">      <color rgba="0.8 0.0 0.0 1.0"/></material>
+
+  <!-- ros2_control kaldırıldı: Gazebo Harmonic native plugin'leri kullanılıyor
+       VelocityControl  → /cmd_vel ile doğrudan gövde hareketi
+       OdometryPublisher → /odom ve TF yayını                        -->
+
+  <!-- ============================= -->
+  <!--         Makrolar              -->
+  <!-- ============================= -->
+  <xacro:macro name="omni_wheel" params="name pos_x pos_y wheel_angle">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${wheel_mass}"/>
+        <inertia
+          ixx="${wheel_mass/12*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)}"
+          ixy="0" ixz="0"
+          iyy="${wheel_mass/12*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)}"
+          iyz="0"
+          izz="${wheel_mass/2*wheel_radius*wheel_radius}"/>
+      </inertial>
+    </link>
+
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <!-- teker merkezi = base_link_z - base_height/2 = 0.11 - 0.06 = 0.05m (zeminde) -->
+      <origin xyz="${pos_x} ${pos_y} ${-base_height/2}"
+              rpy="0 0 ${wheel_angle}"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- ============================= -->
+  <!--         Linkler               -->
+  <!-- ============================= -->
+
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <!-- teker merkezi yerden wheel_radius yukarıda, gövde bunun üstünde -->
+    <!-- base_link merkezi = wheel_radius + base_height/2 = 0.05 + 0.06 = 0.11 m -->
+    <origin xyz="0 0 ${wheel_radius + base_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Ana gövde -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${base_radius}" length="${base_height}"/>
+      </geometry>
+      <material name="dark_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${base_radius}" length="${base_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${chassis_mass}"/>
+      <inertia
+        ixx="${chassis_mass/12*(3*base_radius*base_radius + base_height*base_height)}"
+        ixy="0" ixz="0"
+        iyy="${chassis_mass/12*(3*base_radius*base_radius + base_height*base_height)}"
+        iyz="0"
+        izz="${chassis_mass/2*base_radius*base_radius}"/>
+    </inertial>
+  </link>
+
+  <!--
+    Tekerlekler: 120° aralıklı, merkezden L=25 cm
+      wheel_1: -60° → sağ-ön   pos=(+0.5L, -0.866L)  spin_angle=+30°  (π/6)
+      wheel_2: +60° → sol-ön   pos=(+0.5L, +0.866L)  spin_angle=-30°  (-π/6)
+      wheel_3: 180° → arka     pos=(-L,    0)         spin_angle=+90°  (π/2)
+
+    wheel_angle = spin ekseninin yaw açısı.
+    Spin ekseni radyal yönde → tekerlek teğet yönde yuvarlanır (omni).
+  -->
+  <xacro:omni_wheel name="wheel_1"
+    pos_x="${wheel_base * 0.5}"   pos_y="${-wheel_base * 0.866}"
+    wheel_angle="${pi/6}"/>
+
+  <xacro:omni_wheel name="wheel_2"
+    pos_x="${wheel_base * 0.5}"   pos_y="${wheel_base * 0.866}"
+    wheel_angle="${-pi/6}"/>
+
+  <xacro:omni_wheel name="wheel_3"
+    pos_x="${-wheel_base}"  pos_y="0.0"
+    wheel_angle="${pi/2}"/>
+
+  <!-- LiDAR linki -->
+  <link name="laser">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.04" length="0.05"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.04" length="0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.001" ixy="0" ixz="0"
+               iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="0 0 ${base_height/2 + lidar_height}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Kamera linki (Intel RealSense D435b) -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.090 0.025"/>
+      </geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.025 0.090 0.025"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.08"/>
+      <inertia ixx="0.001" ixy="0" ixz="0"
+               iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="${camera_x} 0 ${base_height/2 + camera_z}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_optical_frame"/>
+  <joint name="camera_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- IMU linki -->
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0"
+               iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ============================= -->
+  <!--  Gazebo Harmonic Eklentileri  -->
+  <!-- ============================= -->
+
+  <!-- Holonomik gövde hareketi: ROS /cmd_vel → VelocityControl plugin
+       Twist.linear.x/y → m/s, Twist.angular.z → rad/s (gövde çerçevesinde) -->
+  <gazebo>
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/model/omni_robot/cmd_vel</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- Eklem açılarını yayınlar → ros_gz_bridge /joint_states'e köprüler
+       → robot_state_publisher teker TF'lerini günceller (RViz'de animasyon) -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/model/omni_robot/joint_states</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- Odometri: fiziğin gerçek pozunu okuyup /model/omni_robot/odometry yayınlar
+       ros_gz_bridge bunu ROS /odom'a köprüler.
+       publish_tf=false: TF'yi sim_odom_tf_node yayınlar (base_footprint→base_link çakışmasını önler) -->
+  <gazebo>
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>odom</odom_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <publish_tf>false</publish_tf>
+      <odom_topic>/model/omni_robot/odometry</odom_topic>
+      <update_frequency>20</update_frequency>
+    </plugin>
+  </gazebo>
+
+  <!-- Teker sürtünmesi (omni: yan kayma için mu2 düşük) -->
+  <gazebo reference="wheel_1">
+    <mu1>1.0</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+  <gazebo reference="wheel_2">
+    <mu1>1.0</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+  <gazebo reference="wheel_3">
+    <mu1>1.0</mu1>
+    <mu2>0.1</mu2>
+  </gazebo>
+
+  <!-- LiDAR sensörü (Gazebo Harmonic: gpu_lidar) -->
+  <!-- ros_gz_bridge ile /lidar_gz → /scan olarak köprülenir -->
+  <gazebo reference="laser">
+    <sensor name="lidar_sensor" type="gpu_lidar">
+      <always_on>true</always_on>
+      <visualize>true</visualize>
+      <update_rate>7</update_rate>
+      <topic>/lidar_gz</topic>
+      <gz_frame_id>laser</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265</min_angle>
+            <max_angle>3.14159265</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.10</min>
+          <max>8.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <!-- IMU sensörü (Gazebo Harmonic) -->
+  <!-- ros_gz_bridge ile /imu_gz → /imu olarak köprülenir -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>/imu_gz</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0</mean><stddev>0.009</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0</mean><stddev>0.009</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0</mean><stddev>0.009</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0</mean><stddev>0.021</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0</mean><stddev>0.021</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0</mean><stddev>0.021</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+</robot>
