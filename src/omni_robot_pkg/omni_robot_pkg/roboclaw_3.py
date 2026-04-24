@@ -192,6 +192,7 @@ class Roboclaw:
 		self._writeword(val)
 
 	def _writelong(self,val):
+		val = int(val)
 		self._writebyte((val>>24)&0xFF)
 		self._writebyte((val>>16)&0xFF)
 		self._writebyte((val>>8)&0xFF)
