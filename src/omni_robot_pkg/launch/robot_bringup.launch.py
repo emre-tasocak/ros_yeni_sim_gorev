@@ -22,7 +22,7 @@ Görevi başlatmak için:
 
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.actions import DeclareLaunchArgument, TimerAction, ExecuteProcess
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
@@ -150,6 +150,18 @@ def generate_launch_description():
         mission,
     ])
 
+    # t = 7s — Tüm düğümler hazır, görevi otomatik başlat
+    auto_start_mission = TimerAction(
+        period=7.0,
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'service', 'call', '/start_mission',
+                     'std_srvs/srv/Trigger'],
+                output='screen',
+            )
+        ]
+    )
+
     return LaunchDescription([
         rviz_arg,
         robot_state_publisher,
@@ -158,4 +170,5 @@ def generate_launch_description():
         rviz_node,
         delayed_odom,
         delayed_app,
+        auto_start_mission,
     ])
