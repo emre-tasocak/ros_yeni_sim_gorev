@@ -1,16 +1,20 @@
 """
 3-Tekerli Omni Robot Kinematik Hesaplamaları
 
-Tekerlek konfigürasyonu (orijinal RoboCup kodundan alınmıştır):
-  w1: Arka-sol tekerlek
-  w2: Arka-sağ tekerlek
-  w3: Ön tekerlek
+Fiziksel tekerlek konfigürasyonu (robota üstten bakıldığında, x=ileri, y=sol):
+  w1: Sağ-ön  (front-right), α₁ = -60°
+  w2: Sol-ön  (front-left),  α₂ = +60°
+  w3: Arka    (back),        α₃ = 180°
 
-İleri kinematik matris (J):
-  [vx, vy, omega] = J @ [w1_dist, w2_dist, w3_dist]
+Omni teker hız formülü: v_i = -vx·sin(αᵢ) + vy·cos(αᵢ) + L·ω
 
-Ters kinematik matris (J_inv):
-  [w1, w2, w3] = J_inv @ [vx, vy, omega]
+Ters kinematik matris (J_inv): [w1, w2, w3] = J_inv @ [vx, vy, omega]
+  J_inv = [[ √3/2,  1/2, L ],   # w1 (α=-60°)
+           [-√3/2,  1/2, L ],   # w2 (α=+60°)
+           [  0,   -1,   L ]]   # w3 (α=180°)
+
+İleri kinematik matris (J): [vx, vy, omega] = J @ [w1_dist, w2_dist, w3_dist]
+  J = inv(J_inv) — numpy ile hesaplanır
 """
 
 import numpy as np
@@ -37,17 +41,18 @@ class OmniKinematics:
         # Bir tick'in karşılık geldiği mesafe (metre)
         self.dist_per_tick = (2.0 * math.pi * self.r) / self.ticks_per_rev
 
-        # İleri kinematik matris: teker deplasmanları → robot deplasmanı
-        # Orijinal RoboCup kodundan (wheel_separation=L)
+        # Ters kinematik matris: robot gövde hızı → teker doğrusal hızı
+        # v_i = -vx·sin(αᵢ) + vy·cos(αᵢ) + L·ω
         L = self.L
-        self.J = np.array([
-            [1.0 / 6.0,             -1.0 / 3.0,              1.0 / 6.0],
-            [-math.sqrt(3) / 4.0,   0.0,                     math.sqrt(3) / 4.0],
-            [-1.0 / (3.0 * L),      -1.0 / (3.0 * L),       -1.0 / (3.0 * L)]
+        s = math.sqrt(3) / 2.0  # sin(60°) = √3/2
+        self.J_inv = np.array([
+            [ s,   0.5,  L],   # w1: sağ-ön,  α₁ = -60°
+            [-s,   0.5,  L],   # w2: sol-ön,  α₂ = +60°
+            [ 0.0, -1.0, L],   # w3: arka,    α₃ = 180°
         ])
 
-        # Ters kinematik matris: robot hızı → teker hızı
-        self.J_inv = np.linalg.inv(self.J)
+        # İleri kinematik matris: teker deplasmanları → robot deplasmanı
+        self.J = np.linalg.inv(self.J_inv)
 
     # ------------------------------------------------------------------
     # Hız dönüşümleri
