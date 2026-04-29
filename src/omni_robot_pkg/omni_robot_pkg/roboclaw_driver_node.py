@@ -133,9 +133,9 @@ class RoboclawDriverNode(Node):
         if not self.hardware_ok:
             return
         try:
-            raw1 = self.rc.ReadEncM2(self.addr1)
-            raw2 = self.rc.ReadEncM1(self.addr1)
-            raw3 = self.rc.ReadEncM1(self.addr2)
+            raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Teker 1 (sağ-ön)
+            raw2 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 2 (sol-ön)
+            raw3 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 3 (arka)
 
             if raw1[0] and raw2[0] and raw3[0]:
                 msg = Int32MultiArray()
