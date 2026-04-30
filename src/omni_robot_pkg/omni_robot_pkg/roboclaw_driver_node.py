@@ -133,15 +133,36 @@ class RoboclawDriverNode(Node):
         if not self.hardware_ok:
             return
         try:
-            raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Teker 1 (sağ-ön)
-            raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 2 (sol-ön)
-            raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 3 (arka)
+            raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Teker 1
+            raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 2
+            raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 3
 
-            if raw1[0] and raw2[0] and raw3[0]:
-                msg = Int32MultiArray()
-                msg.data = [int(raw1[1]), int(raw2[1]), int(raw3[1])]
-                self.wheel_ticks_pub.publish(msg)
-                self._reset_encoders()
+            ok1 = len(raw1) >= 2 and raw1[0]
+            ok2 = len(raw2) >= 2 and raw2[0]
+            ok3 = len(raw3) >= 2 and raw3[0]
+
+            self.get_logger().debug(
+                f'ENC raw: w1={raw1} w2={raw2} w3={raw3}',
+                throttle_duration_sec=1.0)
+
+            if not ok1:
+                self.get_logger().warn('Teker1 (RC1 M2) enkoder okunamadı!',
+                                       throttle_duration_sec=3.0)
+            if not ok2:
+                self.get_logger().warn('Teker2 (RC1 M1) enkoder okunamadı!',
+                                       throttle_duration_sec=3.0)
+            if not ok3:
+                self.get_logger().warn('Teker3 (RC2 M2) enkoder okunamadı!',
+                                       throttle_duration_sec=3.0)
+
+            t1 = int(raw1[1]) if ok1 else 0
+            t2 = int(raw2[1]) if ok2 else 0
+            t3 = int(raw3[1]) if ok3 else 0
+
+            msg = Int32MultiArray()
+            msg.data = [t1, t2, t3]
+            self.wheel_ticks_pub.publish(msg)
+            self._reset_encoders()
         except Exception as e:
             self.get_logger().warn(f'Enkoder okuma hatası: {e}', throttle_duration_sec=2.0)
 
