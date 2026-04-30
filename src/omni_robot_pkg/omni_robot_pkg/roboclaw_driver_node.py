@@ -67,6 +67,7 @@ class RoboclawDriverNode(Node):
         if self.hardware_ok:
             self._reset_encoders()
         self._prev_ticks = [0, 0, 0]
+        self._enc_initialized = False
 
         self.cmd_vel_sub = self.create_subscription(
             Twist, '/cmd_vel', self._cmd_vel_callback, 10)
@@ -103,10 +104,8 @@ class RoboclawDriverNode(Node):
 
     def _reset_encoders(self):
         try:
-            self.rc.SetEncM1(self.addr1, 0)
-            self.rc.SetEncM2(self.addr1, 0)
-            self.rc.SetEncM1(self.addr2, 0)
-            self.rc.SetEncM2(self.addr2, 0)
+            self.rc.ResetEncoders(self.addr1)
+            self.rc.ResetEncoders(self.addr2)
         except Exception as e:
             self.get_logger().warn(f'Enkoder sıfırlama hatası: {e}')
 
@@ -137,13 +136,9 @@ class RoboclawDriverNode(Node):
             raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 2
             raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 3
 
-            ok1 = len(raw1) >= 2 and raw1[0]
-            ok2 = len(raw2) >= 2 and raw2[0]
-            ok3 = len(raw3) >= 2 and raw3[0]
-
-            self.get_logger().debug(
-                f'ENC raw: w1={raw1} w2={raw2} w3={raw3}',
-                throttle_duration_sec=1.0)
+            ok1 = len(raw1) >= 3 and raw1[0]
+            ok2 = len(raw2) >= 3 and raw2[0]
+            ok3 = len(raw3) >= 3 and raw3[0]
 
             if not ok1:
                 self.get_logger().warn('Teker1 (RC1 M2) enkoder okunamadı!',
@@ -155,14 +150,23 @@ class RoboclawDriverNode(Node):
                 self.get_logger().warn('Teker3 (RC2 M2) enkoder okunamadı!',
                                        throttle_duration_sec=3.0)
 
-            t1 = int(raw1[1]) if ok1 else 0
-            t2 = int(raw2[1]) if ok2 else 0
-            t3 = int(raw3[1]) if ok3 else 0
+            cur = [
+                int(raw1[1]) if ok1 else self._prev_ticks[0],
+                int(raw2[1]) if ok2 else self._prev_ticks[1],
+                int(raw3[1]) if ok3 else self._prev_ticks[2],
+            ]
+
+            if not self._enc_initialized:
+                self._prev_ticks = cur[:]
+                self._enc_initialized = True
+                return
+
+            delta = [cur[i] - self._prev_ticks[i] for i in range(3)]
+            self._prev_ticks = cur[:]
 
             msg = Int32MultiArray()
-            msg.data = [t1, t2, t3]
+            msg.data = delta
             self.wheel_ticks_pub.publish(msg)
-            self._reset_encoders()
         except Exception as e:
             self.get_logger().warn(f'Enkoder okuma hatası: {e}', throttle_duration_sec=2.0)
 

@@ -64,4 +64,4 @@
     odom_frame_id: "odom"
 
     # ---- Kontrol Döngüsü Frekansı ----
-    control_frequency: 20.0       # Hz
+    control_frequency: 10.0       # Hz (UART yükünü azaltmak için)
