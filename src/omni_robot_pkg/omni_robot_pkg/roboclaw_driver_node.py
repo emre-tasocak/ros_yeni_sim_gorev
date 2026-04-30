@@ -6,9 +6,9 @@ Multi-drop bağlantı: adres 0x80 (RC1) ve 0x81 (RC2) ile ayrışır.
 Tek Roboclaw nesnesi, iki farklı adrese komut gönderir.
 
 Motor eşlemesi:
-  RC1 (0x80) M1 → Teker 3 (ters)
   RC1 (0x80) M2 → Teker 1 (ters)
-  RC2 (0x81) M2 → Teker 2 (düz)
+  RC1 (0x80) M1 → Teker 2 (ters)
+  RC2 (0x81) M2 → Teker 3 (düz)
 
 Port izinleri için:
   sudo chmod 666 /dev/ttyAMA0
@@ -94,9 +94,9 @@ class RoboclawDriverNode(Node):
             return
 
         try:
-            self.rc.SetM1VelocityPID(self.addr1, p, i, d, qpps)  # Teker 3
             self.rc.SetM2VelocityPID(self.addr1, p, i, d, qpps)  # Teker 1
-            self.rc.SetM2VelocityPID(self.addr2, p, i, d, qpps)  # Teker 2
+            self.rc.SetM1VelocityPID(self.addr1, p, i, d, qpps)  # Teker 2
+            self.rc.SetM2VelocityPID(self.addr2, p, i, d, qpps)  # Teker 3
             self.hardware_ok = True
         except Exception as e:
             self.get_logger().error(f'PID ayarı başarısız: {e}')
@@ -123,9 +123,9 @@ class RoboclawDriverNode(Node):
         t3 = int(self.kinematics.velocity_to_ticks_per_sec(w3))
 
         try:
-            self.rc.SpeedM2(self.addr1, -t1)  # Teker 1
-            self.rc.SpeedM1(self.addr1, -t3)  # Teker 3
-            self.rc.SpeedM2(self.addr2,  t2)  # Teker 2
+            self.rc.SpeedM2(self.addr1, -t1)  # Teker 1 — RC1 M2
+            self.rc.SpeedM1(self.addr1, -t2)  # Teker 2 — RC1 M1
+            self.rc.SpeedM2(self.addr2,  t3)  # Teker 3 — RC2 M2
         except Exception as e:
             self.get_logger().warn(f'Motor komut hatası: {e}', throttle_duration_sec=2.0)
 
@@ -134,8 +134,8 @@ class RoboclawDriverNode(Node):
             return
         try:
             raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Teker 1 (sağ-ön)
-            raw2 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 2 (sol-ön)
-            raw3 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 3 (arka)
+            raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 2 (sol-ön)
+            raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 3 (arka)
 
             if raw1[0] and raw2[0] and raw3[0]:
                 msg = Int32MultiArray()
