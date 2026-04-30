@@ -9,7 +9,7 @@
 
     # ---- Robot Geometrisi ----
     wheel_radius: 0.05          # Teker yarıçapı (metre)
-    wheel_base: 0.25            # Merkez-teker mesafesi (metre)
+    wheel_base: 0.27            # Merkez-teker mesafesi (metre)
     ticks_per_revolution: 750   # Teker bir turda enkoder tick sayısı
     gear_ratio: 1.0             # Dişli oranı (1.0 = zaten hesaplı)
 
