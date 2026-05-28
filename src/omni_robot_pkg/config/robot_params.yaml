@@ -1,67 +1,69 @@
 # =============================================================
-# 3-Tekerli Omni Robot Parametre Dosyası
-# Tüm düğümler bu parametreleri kullanır.
-# Değiştirmek için bu dosyayı düzenlemek yeterlidir.
+# 3-Wheeled Omni Robot Parameter File
+# All nodes use these parameters.
+# Edit only this file to change configuration.
 # =============================================================
 
 /**:
   ros__parameters:
 
-    # ---- Robot Geometrisi ----
-    wheel_radius: 0.05          # Teker yarıçapı (metre)
-    wheel_base: 0.27            # Merkez-teker mesafesi (metre)
-    ticks_per_revolution: 750   # Teker bir turda enkoder tick sayısı
-    gear_ratio: 1.0             # Dişli oranı (1.0 = zaten hesaplı)
+    # ---- Robot Geometry ----
+    wheel_radius: 0.05          # Wheel radius (meters)
+    wheel_base: 0.27            # Center-to-wheel distance (meters)
+    ticks_per_revolution: 750   # Encoder ticks per wheel revolution
+    gear_ratio: 1.0             # Gear ratio (1.0 = already factored in)
 
-    # ---- RoboClaw Motor Sürücüsü ----
-    # Gerçek robot bağlantı noktaları (kullanılan portları kontrol edin)
-    roboclaw_port_1: "/dev/ttyAMA0"   # Her iki RoboClaw aynı UART hattında (GPIO14/15)
-    roboclaw_port_2: "/dev/ttyAMA0"   # multi-drop: adres 0x80 ve 0x81 ile ayrışır
+    # ---- RoboClaw Motor Driver ----
+    # Real robot connection ports (verify ports before use)
+    roboclaw_port_1: "/dev/ttyAMA0"   # Both RoboClaws on same UART (GPIO14/15)
+    roboclaw_port_2: "/dev/ttyAMA0"   # multi-drop: separated by address 0x80 and 0x81
     roboclaw_baudrate: 38400
     roboclaw_address_1: 128     # 0x80
     roboclaw_address_2: 129     # 0x81
 
-    # RoboClaw PID parametreleri (SetM1VelocityPID order: P, I, D, QPPS)
+    # RoboClaw PID parameters (SetM1VelocityPID order: P, I, D, QPPS)
     roboclaw_pid_p: 50.0
     roboclaw_pid_i: 2.0
     roboclaw_pid_d: 0.0
-    roboclaw_pid_qpps: 7900     # Maksimum hız (tick/sn)
+    roboclaw_pid_qpps: 7900     # Maximum speed (ticks/sec)
 
     # ---- LiDAR ----
     lidar_port: "/dev/ttyUSB0"
-    lidar_min_range: 0.30       # Bu mesafenin altındaki okumaları filtrele (tekerleri görmemesi için)
-    lidar_max_range: 8.0        # Geçerli maksimum menzil (metre)
-    lidar_frame_id: "laser"     # LiDAR TF çerçeve adı
+    lidar_min_range: 0.30       # Filter readings below this distance (wheel protection)
+    lidar_max_range: 8.0        # Maximum valid range (meters)
+    lidar_frame_id: "laser"     # LiDAR TF frame name
 
-    # ---- Güvenlik ----
-    obstacle_safety_radius: 0.10  # Engele minimum yaklaşma mesafesi (metre, robot merkezinden)
+    # ---- Safety ----
+    obstacle_safety_radius: 0.10  # Minimum approach distance to obstacle (meters, from robot center)
 
-    # ---- Navigasyon ----
-    max_linear_velocity: 0.3      # Maksimum doğrusal hız (m/s)
-    max_angular_velocity: 1.0     # Maksimum açısal hız (rad/s)
-    max_acceleration: 0.5         # Maksimum ivme (m/s²)
-    goal_tolerance: 0.10          # Hedefe ulaşma toleransı (metre)
-    heading_gain: 2.0             # P kontrolcü kazancı (navigasyon)
+    # ---- Navigation ----
+    max_linear_velocity: 0.3      # Maximum linear velocity (m/s)
+    max_angular_velocity: 1.0     # Maximum angular velocity (rad/s)
+    max_acceleration: 0.5         # Maximum acceleration (m/s²)
+    goal_tolerance: 0.10          # Goal reached tolerance (meters)
+    heading_gain: 2.0             # P-controller gain (navigation position)
+    angular_gain: 1.0             # P-controller gain (navigation yaw)
+    angle_tolerance: 0.05         # Goal angle tolerance (radians, ~3°)
 
-    # ---- DWA (Dinamik Pencere Yaklaşımı) Engel Kaçınma ----
-    dwa_predict_time: 2.0         # Yörünge tahmin süresi (sn)
-    dwa_dt: 0.1                   # Simülasyon adım süresi (sn)
-    dwa_velocity_samples: 11      # Her eksen için hız örnek sayısı
-    dwa_alpha: 1.5                # Hedef yön ağırlığı
-    dwa_beta: 3.0                 # Engel mesafesi ağırlığı
-    dwa_gamma: 0.3                # Hız büyüklüğü ağırlığı
-    dwa_min_clearance: 0.08       # DWA için minimum serbest mesafe (m)
-                                  # obstacle_safety_radius (0.10m) dan küçük olmalı:
-                                  # robot sınırda durunca kaçış yolu bulabilsin
+    # ---- DWA (Dynamic Window Approach) Obstacle Avoidance ----
+    dwa_predict_time: 2.0         # Trajectory prediction horizon (s)
+    dwa_dt: 0.1                   # Simulation step size (s)
+    dwa_velocity_samples: 11      # Number of velocity samples per axis
+    dwa_alpha: 1.5                # Goal heading weight
+    dwa_beta: 3.0                 # Obstacle distance weight
+    dwa_gamma: 0.3                # Speed magnitude weight
+    dwa_min_clearance: 0.08       # Minimum clearance for DWA (m)
+                                  # Must be less than obstacle_safety_radius (0.10m):
+                                  # allows escape path when robot is at boundary
 
-    # ---- Görev Parametreleri ----
-    mission_stop_distance: 0.50   # Hedefe ne kadar yaklaşınca duracak (metre)
-    home_tolerance: 0.15          # Eve dönüş toleransı (metre)
-    scan_settle_time: 2.0         # LiDAR tarama bekleme süresi (sn)
+    # ---- Mission Parameters ----
+    obstacle_stop_distance: 0.50  # Stop this far before obstacle (meters)
+    home_tolerance: 0.15          # Return home tolerance (meters)
+    wait_at_target: 2.0           # Wait time at target before returning (s)
 
-    # ---- TF Çerçeve Adları ----
+    # ---- TF Frame Names ----
     base_frame_id: "base_link"
     odom_frame_id: "odom"
 
-    # ---- Kontrol Döngüsü Frekansı ----
-    control_frequency: 10.0       # Hz (UART yükünü azaltmak için)
+    # ---- Control Loop Frequency ----
+    control_frequency: 10.0       # Hz (reduced to lower UART load)

@@ -1,23 +1,23 @@
 """
-DWA Dinamik Engel Kaçınma Düğümü
+DWA Dynamic Obstacle Avoidance Node
 
-Dinamik Pencere Yaklaşımı (Dynamic Window Approach) kullanarak
-navigasyon düğümünden gelen ham hız komutunu güvenli bir hız komutuna çevirir.
+Uses the Dynamic Window Approach (DWA) to convert the raw velocity
+command from the navigation node into a safe velocity command.
 
-Mimari:
-  /cmd_vel_nav  (navigasyon istediği hız)
-  /scan/filtered (LiDAR verisi)
+Architecture:
+  /cmd_vel_nav  (desired velocity from navigation)
+  /scan/filtered (LiDAR data)
          ↓
-    [DWA Algoritması]
+    [DWA Algorithm]
          ↓
-  /cmd_vel (engelden kaçınılmış güvenli hız)
+  /cmd_vel (obstacle-free safe velocity)
 
-DWA Mantığı:
-1. Hedef yön ile hizalanmış hız örnekleri üret (dinamik pencere)
-2. Her örnek için yörünge simüle et
-3. Güvensiz yörüngeleri (engele <safety_radius) ele
-4. En iyi puanlı yörüngeyi seç:
-   puan = α*hedef_hizalama + β*engel_mesafesi + γ*hız_büyüklüğü
+DWA Logic:
+1. Generate velocity samples aligned with goal direction (dynamic window)
+2. Simulate trajectory for each sample
+3. Reject unsafe trajectories (obstacle < safety_radius)
+4. Select best-scoring trajectory:
+   score = α*goal_alignment + β*obstacle_distance + γ*speed_magnitude
 """
 
 import math
@@ -29,12 +29,12 @@ from sensor_msgs.msg import LaserScan
 
 
 class ObstacleAvoidanceNode(Node):
-    """DWA tabanlı dinamik engel kaçınma düğümü."""
+    """DWA-based dynamic obstacle avoidance node."""
 
     def __init__(self):
         super().__init__('obstacle_avoidance')
 
-        # --- Parametreler ---
+        # --- Parameters ---
         self.declare_parameter('max_linear_velocity', 0.3)
         self.declare_parameter('max_acceleration', 0.5)
         self.declare_parameter('lidar_min_range', 0.30)
@@ -62,16 +62,16 @@ class ObstacleAvoidanceNode(Node):
         self.gamma = self.get_parameter('dwa_gamma').value
         self.min_clearance = self.get_parameter('dwa_min_clearance').value
 
-        # Mevcut hız (dinamik pencere hesabı için)
+        # Current velocity (used for dynamic window computation)
         self.current_vx = 0.0
         self.current_vy = 0.0
 
-        # LiDAR verisi (son alınan)
+        # LiDAR data (latest received)
         self.scan_ranges: list = []
         self.scan_angles: list = []
         self.has_scan = False
 
-        # --- Yayıncılar / Aboneler ---
+        # --- Publishers / Subscribers ---
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         self.cmd_vel_nav_sub = self.create_subscription(
@@ -80,10 +80,10 @@ class ObstacleAvoidanceNode(Node):
         self.scan_sub = self.create_subscription(
             LaserScan, '/scan/filtered', self._scan_callback, 10)
 
-        self.get_logger().info('DWA engel kaçınma düğümü başlatıldı.')
+        self.get_logger().info('DWA obstacle avoidance node started.')
 
     def _scan_callback(self, msg: LaserScan):
-        """LiDAR verisini günceller."""
+        """Updates LiDAR data."""
         ranges = []
         angles = []
         for i, r in enumerate(msg.ranges):
@@ -97,51 +97,51 @@ class ObstacleAvoidanceNode(Node):
 
     def _nav_cmd_callback(self, msg: Twist):
         """
-        Navigasyon hız komutunu alır, DWA ile güvenli hız hesaplayıp yayınlar.
+        Receives navigation velocity command, computes safe velocity via DWA, publishes it.
         """
         desired_vx = msg.linear.x
         desired_vy = msg.linear.y
         desired_omega = msg.angular.z
 
-        # Eğer henüz LiDAR verisi yoksa doğrudan ilet
+        # If no LiDAR data yet, pass through directly
         if not self.has_scan or len(self.scan_ranges) == 0:
             self.cmd_vel_pub.publish(msg)
             return
 
-        # En yakın engel mesafesi
+        # Nearest obstacle distance
         nearest = min(self.scan_ranges) if self.scan_ranges else self.lidar_max
 
-        # Engel güvenli bölgede değilse DWA çalıştır
+        # Run DWA only when obstacle is within threat zone
         if nearest > self.safety_r * 2.5:
-            # Engel yeterince uzakta — istenen hızı doğrudan uygula
+            # Obstacle far enough — pass desired velocity directly
             safe_vx, safe_vy = desired_vx, desired_vy
         else:
             safe_vx, safe_vy = self._dwa_step(desired_vx, desired_vy)
 
-            # DWA hiç yol bulamazsa (robot sınırda sıkıştı):
-            # İstenen hız engelden UZAKLAŞIYORSA izin ver (yavaş)
+            # DWA found no path (robot stuck at boundary):
+            # If desired velocity moves AWAY from obstacle, allow it (slow)
             if safe_vx == 0.0 and safe_vy == 0.0 and (desired_vx != 0.0 or desired_vy != 0.0):
                 safe_vx, safe_vy = self._escape_if_moving_away(
                     desired_vx, desired_vy, nearest)
 
-        # Çıkış komutu
+        # Output command
         out = Twist()
         out.linear.x = safe_vx
         out.linear.y = safe_vy
         out.angular.z = desired_omega
         self.cmd_vel_pub.publish(out)
 
-        # Mevcut hızı güncelle
+        # Update current velocity
         self.current_vx = safe_vx
         self.current_vy = safe_vy
 
     def _dwa_step(self, desired_vx: float, desired_vy: float):
         """
-        DWA adımı: istenen hız etrafında örnek üretir,
-        her örnek için clearance hesaplar, en iyi olanı döndürür.
+        DWA step: generates samples around desired velocity,
+        computes clearance for each, returns the best one.
         """
-        # Dinamik pencere (mevcut hız ve ivme sınırından hesaplanır)
-        dt_ctrl = 1.0 / 20.0  # kontrol dönemi
+        # Dynamic window (from current velocity and acceleration limits)
+        dt_ctrl = 1.0 / 20.0  # control period
         dv = self.max_acc * dt_ctrl
 
         vx_min = max(-self.max_v, self.current_vx - dv)
@@ -149,7 +149,7 @@ class ObstacleAvoidanceNode(Node):
         vy_min = max(-self.max_v, self.current_vy - dv)
         vy_max = min(self.max_v, self.current_vy + dv)
 
-        # Hız örnekleri
+        # Velocity samples
         vx_samples = np.linspace(vx_min, vx_max, self.n_samples)
         vy_samples = np.linspace(vy_min, vy_max, self.n_samples)
 
@@ -162,22 +162,22 @@ class ObstacleAvoidanceNode(Node):
                 if speed > self.max_v:
                     continue
 
-                # Yörünge boyunca minimum clearance
+                # Minimum clearance along trajectory
                 clearance = self._compute_clearance(vx, vy)
 
-                # Güvensiz yörünge — atla
+                # Unsafe trajectory — skip
                 if clearance < self.min_clearance:
                     continue
 
-                # Puan hesabı
-                # 1) Hedef hız ile ne kadar uyumlu?
+                # Score computation
+                # 1) How well aligned with desired velocity?
                 goal_dist = math.sqrt((vx - desired_vx)**2 + (vy - desired_vy)**2)
                 heading_score = 1.0 / (1.0 + goal_dist)
 
-                # 2) Engele ne kadar uzak? (normalize)
+                # 2) How far from obstacles? (normalized)
                 clearance_score = min(clearance / self.lidar_max, 1.0)
 
-                # 3) Hız büyüklüğü (ilerleme teşviki)
+                # 3) Speed magnitude (encourages progress)
                 speed_score = speed / self.max_v
 
                 score = (self.alpha * heading_score +
@@ -189,8 +189,8 @@ class ObstacleAvoidanceNode(Node):
                     best_vx, best_vy = vx, vy
 
         if best_score == -1e9:
-            # Hiç güvenli yörünge bulunamadı — dur
-            self.get_logger().warn('DWA: Güvenli yörünge bulunamadı, duruluyor!',
+            # No safe trajectory found — stop
+            self.get_logger().warn('DWA: No safe trajectory found, stopping!',
                                    throttle_duration_sec=1.0)
             return 0.0, 0.0
 
@@ -198,26 +198,26 @@ class ObstacleAvoidanceNode(Node):
 
     def _compute_clearance(self, vx: float, vy: float) -> float:
         """
-        Verilen hız komutu ile oluşacak yörünge boyunca
-        en yakın engele olan mesafeyi hesaplar.
+        Computes minimum distance to any obstacle along the trajectory
+        generated by the given velocity command.
 
-        Robot sabit vx, vy ile predict_t kadar hareket eder.
-        Her dt adımında robot pozisyonu kontrol edilir.
+        Robot moves at constant vx, vy for predict_t seconds.
+        Robot position is checked at each dt step.
         """
         if not self.scan_ranges:
             return self.lidar_max
 
         min_clearance = self.lidar_max
 
-        # Zaman adımlarında robot pozisyonu
+        # Robot position at each time step
         steps = int(self.predict_t / self.dt)
         for step in range(1, steps + 1):
             t = step * self.dt
-            # Robot çerçevesinde tahmin pozisyonu
+            # Predicted position in robot frame
             px = vx * t
             py = vy * t
 
-            # Bu pozisyonun engellere olan mesafesi
+            # Distance from this position to each obstacle
             for r, angle in zip(self.scan_ranges, self.scan_angles):
                 ox = r * math.cos(angle)
                 oy = r * math.sin(angle)
@@ -230,16 +230,16 @@ class ObstacleAvoidanceNode(Node):
     def _escape_if_moving_away(self, desired_vx: float, desired_vy: float,
                                 nearest: float):
         """
-        DWA yol bulamadığında son çare: robot zaten sınırda sıkışmış.
-        İstenen hız engelden UZAKLAŞIYORSA, düşük hızla geçişe izin ver.
+        Last resort when DWA finds no path: robot is stuck at boundary.
+        If desired velocity moves AWAY from obstacle, allow slow passage.
 
-        Nasıl çalışır: en yakın engelin yönünü bul, istenen hız ona karşı mı bak.
-        Karşıysa (yani uzaklaşıyorsa) max_v'nin yarısıyla ilerlemeye izin ver.
+        How it works: find direction of nearest obstacle, check if desired
+        velocity is opposed to it. If opposed (moving away), allow at half max_v.
         """
         if not self.scan_ranges:
             return 0.0, 0.0
 
-        # En yakın engelin yönünü bul (laser çerçevesinde)
+        # Find direction of nearest obstacle (in laser frame)
         min_r = nearest
         min_angle = 0.0
         for r, angle in zip(self.scan_ranges, self.scan_angles):
@@ -247,25 +247,25 @@ class ObstacleAvoidanceNode(Node):
                 min_angle = angle
                 break
 
-        # Engele doğru birim vektör
+        # Unit vector toward obstacle
         obs_dx = math.cos(min_angle)
         obs_dy = math.sin(min_angle)
 
-        # İstenen hızın engel yönüyle iç çarpımı
-        # Negatifse → istenen hız engelden uzaklaşıyor → güvenli
+        # Dot product of desired velocity with obstacle direction
+        # Negative → desired velocity moves away from obstacle → safe
         dot = desired_vx * obs_dx + desired_vy * obs_dy
         if dot < 0.0:
-            # Uzaklaşıyoruz, normalleştirip max_v/2 ile git
+            # Moving away, normalize and go at max_v/2
             speed = math.sqrt(desired_vx**2 + desired_vy**2)
             if speed < 1e-6:
                 return 0.0, 0.0
             scale = min(self.max_v * 0.5 / speed, 1.0)
             self.get_logger().warn(
-                'DWA kurtarma: engelden uzaklaşılıyor, yavaş geçiş.',
+                'DWA escape: moving away from obstacle, slow transit.',
                 throttle_duration_sec=2.0)
             return desired_vx * scale, desired_vy * scale
 
-        # Engele doğru gidiyoruz — dur
+        # Moving toward obstacle — stop
         return 0.0, 0.0
 
 

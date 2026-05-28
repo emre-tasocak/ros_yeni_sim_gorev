@@ -1,11 +1,11 @@
 """
-Simülasyon Cmd_Vel Kontrolörü
+Simulation Cmd_Vel Controller
 
-Gazebo Harmonic simülasyonunda iki görevi yerine getirir:
-  1. /cmd_vel (Twist) → ters kinematik → /omni_wheel_controller/commands
-     (JointGroupVelocityController için rad/s teker hızları)
-  2. /joint_states → delta açı → /wheel_ticks (Int32MultiArray)
-     (odometry_node'un gerçek robotla aynı kodla çalışabilmesi için)
+Serves two purposes in Gazebo Harmonic simulation:
+  1. /cmd_vel (Twist) → inverse kinematics → /omni_wheel_controller/commands
+     (wheel velocities in rad/s for JointGroupVelocityController)
+  2. /joint_states → angle delta → /wheel_ticks (Int32MultiArray)
+     (so odometry_node can run with the same code as the real robot)
 """
 
 import math
@@ -17,7 +17,7 @@ from std_msgs.msg import Float64MultiArray, Int32MultiArray
 
 from omni_robot_pkg.omni_kinematics import OmniKinematics
 
-# Kontrolör tarafından beklenen teker eklemi sırası
+# Wheel joint order expected by the controller
 JOINT_ORDER = ['wheel_1_joint', 'wheel_2_joint', 'wheel_3_joint']
 
 
@@ -41,11 +41,11 @@ class SimCmdVelController(Node):
             ticks_per_rev=ticks, gear_ratio=gear
         )
 
-        # JointGroupVelocityController komut yayıncısı
+        # JointGroupVelocityController command publisher
         self.wheel_cmd_pub = self.create_publisher(
             Float64MultiArray, '/omni_wheel_controller/commands', 10)
 
-        # Odometri düğümü için teker tick yayıncısı
+        # Wheel tick publisher for odometry node
         self.ticks_pub = self.create_publisher(
             Int32MultiArray, '/wheel_ticks', 10)
 
@@ -55,15 +55,15 @@ class SimCmdVelController(Node):
         self.joint_sub = self.create_subscription(
             JointState, '/joint_states', self._joint_states_cb, 10)
 
-        # Bir önceki ölçüm anındaki teker açıları (radyan)
+        # Wheel joint angles from previous measurement (radians)
         self._last_pos = None
 
-        self.get_logger().info('Simülasyon cmd_vel kontrolörü başlatıldı.')
+        self.get_logger().info('Simulation cmd_vel controller started.')
 
     # ------------------------------------------------------------------
 
     def _cmd_vel_cb(self, msg: Twist):
-        """Twist → teker doğrusal hızı (m/s) → açısal hız (rad/s) → kontrolör."""
+        """Twist → wheel linear velocity (m/s) → angular velocity (rad/s) → controller."""
         w1_ms, w2_ms, w3_ms = self.kinematics.robot_vel_to_wheel_vel(
             msg.linear.x, msg.linear.y, msg.angular.z
         )
@@ -74,8 +74,8 @@ class SimCmdVelController(Node):
 
     def _joint_states_cb(self, msg: JointState):
         """
-        JointState açı farkı → enkoder tick sayısı → /wheel_ticks
-        Formül: delta_ticks = delta_rad * ticks_per_rev / (2π)
+        JointState angle delta → encoder tick count → /wheel_ticks
+        Formula: delta_ticks = delta_rad * ticks_per_rev / (2π)
         """
         pos_map = dict(zip(msg.name, msg.position))
         if not all(j in pos_map for j in JOINT_ORDER):

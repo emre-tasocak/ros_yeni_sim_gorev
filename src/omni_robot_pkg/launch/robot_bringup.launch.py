@@ -1,22 +1,22 @@
 """
-Gerçek Robot Bringup Launch Dosyası
+Real Robot Bringup Launch File
 
-Donanım:
-  - 2× RoboClaw 2x15A  (/dev/ttyAMA0, /dev/ttyAMA1)
+Hardware:
+  - 2x RoboClaw 2x15A  (/dev/ttyAMA0)
   - YDLidar X2          (/dev/ttyUSB0)
-  - Intel RealSense D435b (isteğe bağlı, kullanılmıyor)
-  - Enkoder → Odometri
+  - Intel RealSense D435b (optional, not used)
+  - Encoder → Odometry
 
-Başlatma sırası (donanım önce, işlem sonra):
-  t= 0s : robot_state_publisher  (TF için hemen)
-  t= 0s : roboclaw_driver + lidar_node  (donanıma bağlan)
-  t= 3s : odometry_node  (enkoderleri okumaya başla)
+Startup sequence (hardware first, processing second):
+  t= 0s : robot_state_publisher  (needed for TF immediately)
+  t= 0s : roboclaw_driver + lidar_node  (connect to hardware)
+  t= 3s : odometry_node  (start reading encoders)
   t= 4s : lidar_processor, obstacle_avoidance, navigation, mission
 
-Kullanım:
+Usage:
   ros2 launch omni_robot_pkg robot_bringup.launch.py
 
-Görevi başlatmak için:
+To start mission:
   ros2 service call /start_mission std_srvs/srv/Trigger
 """
 
@@ -38,13 +38,13 @@ def generate_launch_description():
 
     rviz_arg = DeclareLaunchArgument(
         'rviz', default_value='false',
-        description='RViz açılsın mı? (gerçek robot için genellikle false)')
+        description='Open RViz? (usually false for real robot)')
 
     rviz = LaunchConfiguration('rviz')
     robot_description = ParameterValue(Command(['xacro ', urdf_file]), value_type=str)
 
     # ================================================================
-    # t = 0s  — TF + donanım
+    # t = 0s  — TF + hardware
     # ================================================================
 
     robot_state_publisher = Node(
@@ -58,8 +58,8 @@ def generate_launch_description():
         output='screen',
     )
 
-    # RoboClaw bağlantısı kurar, PID ayarlar, enkoderleri sıfırlar,
-    # /cmd_vel dinler ve /wheel_ticks yayınlar
+    # Connects to RoboClaw, configures PID, resets encoders,
+    # listens to /cmd_vel and publishes /wheel_ticks
     roboclaw_driver = Node(
         package='omni_robot_pkg',
         executable='roboclaw_driver',
@@ -68,7 +68,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # YDLidar X2 sürücüsü — seri port açar, taramayı başlatır, /scan yayınlar
+    # YDLidar X2 driver — opens serial port, starts scan, publishes /scan
     lidar_node = Node(
         package='omni_robot_pkg',
         executable='lidar_node',
@@ -87,8 +87,8 @@ def generate_launch_description():
     )
 
     # ================================================================
-    # t = 3s  — Enkoderleri oku
-    # RoboClaw bağlandıktan sonra enkoder okumaya başla
+    # t = 3s  — Read encoders
+    # Start reading encoders after RoboClaw is connected
     # ================================================================
 
     # /wheel_ticks → /odom + odom→base_link TF
@@ -103,11 +103,11 @@ def generate_launch_description():
     delayed_odom = TimerAction(period=3.0, actions=[odometry_node])
 
     # ================================================================
-    # t = 4s  — İşlem + görev düğümleri
-    # Odometri hazır olduktan sonra navigasyon ve görev başlasın
+    # t = 4s  — Processing + mission nodes
+    # Start navigation and mission after odometry is ready
     # ================================================================
 
-    # /scan → 30cm filtre → /scan/filtered, /farthest_point, /nearest_obstacle
+    # /scan → 30 cm filter → /scan/filtered, /farthest_point, /nearest_obstacle
     lidar_processor = Node(
         package='omni_robot_pkg',
         executable='lidar_processor',
@@ -116,7 +116,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # DWA engel kaçınma: /cmd_vel_nav → /cmd_vel (güvenli)
+    # DWA obstacle avoidance: /cmd_vel_nav → /cmd_vel (safe)
     obstacle_avoidance = Node(
         package='omni_robot_pkg',
         executable='obstacle_avoidance',
@@ -125,7 +125,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # P-kontrolcü navigasyon: /goal_pose → /cmd_vel_nav
+    # P-controller navigation: /goal_pose → /cmd_vel_nav
     navigation = Node(
         package='omni_robot_pkg',
         executable='navigation_node',
@@ -134,7 +134,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Görev durum makinesi: IDLE→SCANNING→NAVİGATİNG→AT_TARGET→RETURNING→DONE
+    # Mission state machine: IDLE→SCANNING→NAVIGATING→AT_TARGET→RETURNING→DONE
     mission = Node(
         package='omni_robot_pkg',
         executable='mission_node',
@@ -150,7 +150,7 @@ def generate_launch_description():
         mission,
     ])
 
-    # t = 7s — Tüm düğümler hazır, görevi otomatik başlat
+    # t = 7s — All nodes ready, auto-start mission
     auto_start_mission = TimerAction(
         period=7.0,
         actions=[

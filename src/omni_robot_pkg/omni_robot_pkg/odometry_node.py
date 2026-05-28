@@ -1,10 +1,10 @@
 """
-Odometri Düğümü
+Odometry Node
 
-/wheel_ticks verisinden robot pozunu hesaplar ve yayınlar.
-Aynı zamanda odom → base_link TF dönüşümünü yayınlar.
+Computes and publishes robot pose from /wheel_ticks data.
+Also publishes the odom → base_link TF transform.
 
-Simülasyonda bu düğüm kullanılmaz — Gazebo'nun kendi odometrisi kullanılır.
+In simulation this node is not used — Gazebo's built-in odometry is used instead.
 """
 
 import math
@@ -19,7 +19,7 @@ from omni_robot_pkg.omni_kinematics import OmniKinematics
 
 
 def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> Quaternion:
-    """Euler açılarını quaternion'a çevirir."""
+    """Converts Euler angles to quaternion."""
     cy = math.cos(yaw * 0.5)
     sy = math.sin(yaw * 0.5)
     cp = math.cos(pitch * 0.5)
@@ -36,12 +36,12 @@ def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> Quaternion:
 
 
 class OdometryNode(Node):
-    """Enkoder verilerinden odometri hesaplayan ROS2 düğümü."""
+    """ROS2 node that computes odometry from encoder data."""
 
     def __init__(self):
         super().__init__('odometry_node')
 
-        # --- Parametreler ---
+        # --- Parameters ---
         self.declare_parameter('wheel_radius', 0.05)
         self.declare_parameter('wheel_base', 0.25)
         self.declare_parameter('ticks_per_revolution', 750)
@@ -58,31 +58,31 @@ class OdometryNode(Node):
 
         self.kinematics = OmniKinematics(r, L, tpr, gr)
 
-        # Robot pozu (odom çerçevesinde)
+        # Robot pose (in odom frame)
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
 
-        # Hız tahmini (publish için)
+        # Velocity estimate (for publishing)
         self.vx = 0.0
         self.vy = 0.0
         self.vomega = 0.0
         self._last_time = self.get_clock().now()
 
-        # TF yayıncısı
+        # TF broadcaster
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
-        # Odometri yayıncısı
+        # Odometry publisher
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
 
-        # Enkoder abonesi
+        # Encoder subscriber
         self.ticks_sub = self.create_subscription(
             Int32MultiArray, '/wheel_ticks', self._ticks_callback, 10)
 
-        self.get_logger().info('Odometri düğümü başlatıldı.')
+        self.get_logger().info('Odometry node started.')
 
     def _ticks_callback(self, msg: Int32MultiArray):
-        """Enkoder tick değişimlerinden robot pozunu günceller."""
+        """Updates robot pose from encoder tick deltas."""
         if len(msg.data) < 3:
             return
 
@@ -97,13 +97,13 @@ class OdometryNode(Node):
         if dt <= 0.0:
             return
 
-        # Yeni pozu hesapla
+        # Compute new pose
         new_x, new_y, new_yaw, dx, dy, dyaw = self.kinematics.compute_odometry(
             delta_t1, delta_t2, delta_t3,
             self.x, self.y, self.yaw
         )
 
-        # Anlık hız (m/s ve rad/s)
+        # Instantaneous velocity (m/s and rad/s)
         self.vx = dx / dt
         self.vy = dy / dt
         self.vomega = dyaw / dt
@@ -112,12 +112,12 @@ class OdometryNode(Node):
         self.y = new_y
         self.yaw = new_yaw
 
-        # TF ve odometri yayınla
+        # Publish odometry and TF
         self._publish_odom(now)
         self._publish_tf(now)
 
     def _publish_odom(self, stamp):
-        """nav_msgs/Odometry mesajı yayınlar."""
+        """Publishes nav_msgs/Odometry message."""
         odom = Odometry()
         odom.header.stamp = stamp.to_msg()
         odom.header.frame_id = self.odom_frame
@@ -135,7 +135,7 @@ class OdometryNode(Node):
         self.odom_pub.publish(odom)
 
     def _publish_tf(self, stamp):
-        """odom → base_link TF dönüşümünü yayınlar."""
+        """Publishes odom → base_link TF transform."""
         t = TransformStamped()
         t.header.stamp = stamp.to_msg()
         t.header.frame_id = self.odom_frame

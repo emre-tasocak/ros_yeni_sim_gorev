@@ -1,19 +1,16 @@
 """
-Navigasyon Düğümü
+Navigation Node
 
-Robotun hedef bir noktaya gitmesini sağlar.
-Basit P-kontrolcü kullanılır; engel kaçınma ayrı bir düğümde yapılır.
+Drives the robot toward a target point and orientation.
+Uses a simple P-controller; obstacle avoidance is handled in a separate node.
 
-Servisler:
-  /set_goal (SetGoal)  → Yeni hedef belirle
-  /cancel_goal (Trigger) → Hedefi iptal et
+Publications:
+  /cmd_vel_nav  → Navigation velocity command (picked up by obstacle_avoidance node)
+  /goal_reached → Whether goal has been reached (Bool)
 
-Yayınlar:
-  /cmd_vel_nav → Navigasyon hız komutu (obstacle_avoidance düğümü bu komutu alır)
-  /goal_reached → Hedefe ulaşıldı mı (Bool)
-
-Abonelikler:
-  /odom → Mevcut robot pozu
+Subscriptions:
+  /odom      → Current robot pose
+  /goal_pose → Target pose (position + orientation)
 """
 
 import math
@@ -27,55 +24,62 @@ from rcl_interfaces.msg import ParameterDescriptor
 
 
 class NavigationNode(Node):
-    """Hedefe navigasyon ROS2 düğümü (P-kontrolcü)."""
+    """ROS2 navigation node (P-controller)."""
 
     def __init__(self):
         super().__init__('navigation_node')
 
-        # --- Parametreler ---
+        # --- Parameters ---
         self.declare_parameter('max_linear_velocity', 0.3)
+        self.declare_parameter('max_angular_velocity', 1.0)
         self.declare_parameter('goal_tolerance', 0.10)
+        self.declare_parameter('angle_tolerance', 0.05)    # ~3 degrees
         self.declare_parameter('heading_gain', 2.0)
+        self.declare_parameter('angular_gain', 1.0)
         self.declare_parameter('control_frequency', 20.0)
 
         self.max_v = self.get_parameter('max_linear_velocity').value
+        self.max_omega = self.get_parameter('max_angular_velocity').value
         self.tol = self.get_parameter('goal_tolerance').value
+        self.angle_tol = self.get_parameter('angle_tolerance').value
         self.Kp = self.get_parameter('heading_gain').value
+        self.Kp_ang = self.get_parameter('angular_gain').value
         freq = self.get_parameter('control_frequency').value
 
-        # Robot mevcut pozu
+        # Current robot pose
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_yaw = 0.0
 
-        # Hedef pozu
+        # Goal pose
         self.goal_x = None
         self.goal_y = None
+        self.goal_yaw = 0.0
         self.goal_active = False
         self.goal_reached = False
 
-        # --- Yayıncılar / Aboneler ---
+        # --- Publishers / Subscribers ---
         self.cmd_vel_nav_pub = self.create_publisher(Twist, '/cmd_vel_nav', 10)
         self.goal_reached_pub = self.create_publisher(Bool, '/goal_reached', 10)
 
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self._odom_callback, 10)
 
-        # Hedef dinleme (mission_node bu topic'e yayınlar)
+        # Goal listener (mission_node publishes here)
         self.goal_sub = self.create_subscription(
             PoseStamped, '/goal_pose', self._goal_callback, 10)
 
-        # Hedef iptali servisi
+        # Goal cancel service
         self.cancel_srv = self.create_service(
             Trigger, '/cancel_goal', self._cancel_goal_srv)
 
-        # Kontrol döngüsü zamanlayıcısı
+        # Control loop timer
         self.control_timer = self.create_timer(1.0 / freq, self._control_loop)
 
-        self.get_logger().info('Navigasyon düğümü başlatıldı.')
+        self.get_logger().info('Navigation node started.')
 
     def _odom_callback(self, msg: Odometry):
-        """Robot pozunu günceller."""
+        """Updates robot pose."""
         self.robot_x = msg.pose.pose.position.x
         self.robot_y = msg.pose.pose.position.y
 
@@ -86,26 +90,32 @@ class NavigationNode(Node):
         self.robot_yaw = math.atan2(siny, cosy)
 
     def _goal_callback(self, msg: PoseStamped):
-        """Yeni hedef alındığında ayarlar."""
+        """Sets a new goal when received. Extracts yaw from quaternion."""
         self.goal_x = msg.pose.position.x
         self.goal_y = msg.pose.position.y
+        # Extract yaw from quaternion
+        q = msg.pose.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self.goal_yaw = math.atan2(siny, cosy)
         self.goal_active = True
         self.goal_reached = False
         self.get_logger().info(
-            f'Yeni hedef: ({self.goal_x:.2f}, {self.goal_y:.2f})'
+            f'New goal: ({self.goal_x:.2f}, {self.goal_y:.2f}, '
+            f'{math.degrees(self.goal_yaw):.1f}°)'
         )
 
     def _cancel_goal_srv(self, request, response):
-        """Aktif hedefi iptal eder."""
+        """Cancels the active goal."""
         self.goal_active = False
         self._publish_stop()
         response.success = True
-        response.message = 'Hedef iptal edildi.'
-        self.get_logger().info('Hedef iptal edildi.')
+        response.message = 'Goal cancelled.'
+        self.get_logger().info('Goal cancelled.')
         return response
 
     def _control_loop(self):
-        """P-kontrolcü ile hedefe yönelik hız komutu üretir."""
+        """Generates velocity command toward goal using P-controller."""
         if not self.goal_active or self.goal_x is None:
             return
 
@@ -113,8 +123,11 @@ class NavigationNode(Node):
         dy = self.goal_y - self.robot_y
         dist = math.sqrt(dx**2 + dy**2)
 
-        if dist <= self.tol:
-            # Hedefe ulaşıldı
+        # Yaw error
+        yaw_error = self._normalize_angle(self.goal_yaw - self.robot_yaw)
+
+        if dist <= self.tol and abs(yaw_error) <= self.angle_tol:
+            # Goal reached (position + orientation)
             if not self.goal_reached:
                 self.goal_reached = True
                 self.goal_active = False
@@ -123,40 +136,56 @@ class NavigationNode(Node):
                 goal_msg.data = True
                 self.goal_reached_pub.publish(goal_msg)
                 self.get_logger().info(
-                    f'Hedefe ulaşıldı: ({self.robot_x:.2f}, {self.robot_y:.2f})'
+                    f'Goal reached: ({self.robot_x:.2f}, {self.robot_y:.2f}, '
+                    f'{math.degrees(self.robot_yaw):.1f}°)'
                 )
             return
 
-        # Hedef yönünde hız hesapla (P-kontrolcü)
-        # Hız, mesafe ile orantılı ancak max_v ile sınırlı
-        scale = min(self.Kp * dist, self.max_v) / dist
-        vx = dx * scale
-        vy = dy * scale
-
+        # Compute velocity toward goal (P-controller)
         cmd = Twist()
-        cmd.linear.x = vx
-        cmd.linear.y = vy
-        cmd.angular.z = 0.0   # Rotasyon şimdilik sabit (görev gerektirmiyor)
+
+        if dist > self.tol:
+            # Position control: speed proportional to distance, capped at max_v
+            scale = min(self.Kp * dist, self.max_v) / dist
+            vx_global = dx * scale
+            vy_global = dy * scale
+            
+            # Rotate global velocity to robot's local frame
+            cmd.linear.x = vx_global * math.cos(self.robot_yaw) + vy_global * math.sin(self.robot_yaw)
+            cmd.linear.y = -vx_global * math.sin(self.robot_yaw) + vy_global * math.cos(self.robot_yaw)
+        else:
+            # Position reached, only rotate
+            cmd.linear.x = 0.0
+            cmd.linear.y = 0.0
+
+        # Angular control: P-controller for yaw
+        omega = self.Kp_ang * yaw_error
+        omega = max(-self.max_omega, min(self.max_omega, omega))
+        cmd.angular.z = omega
+
         self.cmd_vel_nav_pub.publish(cmd)
 
-        # Her 2 sn'de bir mesafeyi logla
+        # Log distance every 2 s
         self.get_logger().info(
-            f'Hedefe mesafe: {dist:.2f} m  |  vx={vx:.2f}  vy={vy:.2f}',
+            f'Dist: {dist:.2f} m  |  yaw_err: {math.degrees(yaw_error):.1f}°'
+            f'  |  vx={cmd.linear.x:.2f}  vy={cmd.linear.y:.2f}'
+            f'  omega={omega:.2f}',
             throttle_duration_sec=2.0
         )
 
     def _publish_stop(self):
-        """Dur komutu yayınlar."""
+        """Publishes a zero velocity (stop) command."""
         stop = Twist()
         self.cmd_vel_nav_pub.publish(stop)
 
-    def set_goal(self, goal_x: float, goal_y: float):
-        """Programa dahili hedef ayarlamak için yardımcı metod."""
-        self.goal_x = goal_x
-        self.goal_y = goal_y
-        self.goal_active = True
-        self.goal_reached = False
-        self.get_logger().info(f'Hedef ayarlandı: ({goal_x:.2f}, {goal_y:.2f})')
+    @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        """Normalizes angle to [-pi, pi]."""
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
 
 
 def main(args=None):

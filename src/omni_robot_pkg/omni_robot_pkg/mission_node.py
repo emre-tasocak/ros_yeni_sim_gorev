@@ -1,121 +1,144 @@
 """
-Görev Kontrol Düğümü (Ana Durum Makinesi)
+Mission Control Node (User-Input + Obstacle Detection)
 
-Görev:
-  1. Başlat → LiDAR taraması yap
-  2. En uzak noktayı bul (başlangıç anında)
-  3. O noktaya git (50 cm öncesinde dur)
-  4. Başlangıç noktasına geri dön (0, 0)
-  5. Eve ulaşınca motorları durdur
+Görev Akışı:
+  1. Kullanıcıdan hedef konum al (x y phi)
+  2. Hedefe git (navigation_node üzerinden)
+  3. Yolda engel varsa → engelden 50 cm önce dur → başlangıca dön
+  4. Engel yoksa → hedefe ulaş → 2 saniye bekle → başlangıca dön
+  5. Yeni hedef bekle (döngü)
 
 Durum Makinesi:
-  IDLE → SCANNING → NAVIGATING_TO_TARGET → AT_TARGET → RETURNING_HOME → DONE
+  WAITING_INPUT → GOING_TO_TARGET → [STOPPED_BY_OBSTACLE | AT_TARGET] → RETURNING_HOME → WAITING_INPUT
 
-Servisler:
-  /start_mission (Trigger) → Görevi başlat
+LiDAR sadece engel algılama için kullanılır (/nearest_obstacle, /obstacle_detected).
 
-Yayınlar:
-  /mission_state (String) → Mevcut durum
-  /goal_pose     (PoseStamped) → Navigasyon düğümüne hedef
+Publications:
+  /mission_state (String)     → Mevcut durum
+  /goal_pose     (PoseStamped) → Navigation node için hedef
+
+Subscriptions:
+  /odom              → Robot pozisyonu
+  /nearest_obstacle  → En yakın engel mesafesi (Float32)
+  /obstacle_detected → Engel var mı? (Bool)
+  /goal_reached      → Hedefe ulaşıldı mı? (Bool)
 """
 
 import math
+import threading
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, PointStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Float32
 from std_srvs.srv import Trigger
 
 
-# Durum sabitleri
+# State constants
 class State:
-    IDLE                = 'IDLE'
-    SCANNING            = 'SCANNING'
-    NAVIGATING_TO_TARGET = 'NAVIGATING_TO_TARGET'
+    WAITING_INPUT       = 'WAITING_INPUT'
+    GOING_TO_TARGET     = 'GOING_TO_TARGET'
+    STOPPED_BY_OBSTACLE = 'STOPPED_BY_OBSTACLE'
     AT_TARGET           = 'AT_TARGET'
     RETURNING_HOME      = 'RETURNING_HOME'
-    DONE                = 'DONE'
     ERROR               = 'ERROR'
 
 
 class MissionNode(Node):
-    """Ana görev kontrol ROS2 düğümü."""
+    """Main mission control ROS2 node."""
 
     def __init__(self):
         super().__init__('mission_node')
 
-        # --- Parametreler ---
-        self.declare_parameter('mission_stop_distance', 0.50)
+        # --- Parameters ---
+        self.declare_parameter('obstacle_stop_distance', 0.50)
         self.declare_parameter('home_tolerance', 0.15)
-        self.declare_parameter('scan_settle_time', 2.0)
         self.declare_parameter('goal_tolerance', 0.10)
+        self.declare_parameter('wait_at_target', 2.0)
         self.declare_parameter('control_frequency', 20.0)
 
-        self.stop_dist = self.get_parameter('mission_stop_distance').value
+        self.obstacle_stop_dist = self.get_parameter('obstacle_stop_distance').value
         self.home_tol = self.get_parameter('home_tolerance').value
-        self.scan_settle = self.get_parameter('scan_settle_time').value
         self.goal_tol = self.get_parameter('goal_tolerance').value
+        self.wait_time = self.get_parameter('wait_at_target').value
         freq = self.get_parameter('control_frequency').value
 
-        # Durum makinesi
-        self.state = State.IDLE
-        self._scan_start_time = None
-        self._farthest_point = None   # (x, y) odom çerçevesinde
-        self._target_pose = None      # (x, y) → hedefe 50 cm öncesi
+        # State machine
+        self.state = State.WAITING_INPUT
 
-        # Robot başlangıç pozu (odom çerçevesi, 0,0 alınır)
+        # Robot home pose (odom frame, assumed 0,0)
         self.home_x = 0.0
         self.home_y = 0.0
+        self.home_yaw = 0.0
+        self.home_saved = False
 
-        # Mevcut robot pozu
+        # Current robot pose
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_yaw = 0.0
 
-        # Hedefe ulaşıldı mı?
+        # Target pose (from user input)
+        self.target_x = 0.0
+        self.target_y = 0.0
+        self.target_yaw = 0.0
+
+        # Goal reached flag
         self.goal_reached_flag = False
 
-        # --- Yayıncılar ---
+        # Obstacle data
+        self.nearest_obstacle_dist = float('inf')
+        self.obstacle_detected = False
+
+        # Wait timer
+        self._wait_timer = None
+        self._wait_done = False
+
+        # --- Publishers ---
         self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
         self.state_pub = self.create_publisher(String, '/mission_state', 10)
-        # Dur komutu /cmd_vel_nav üzerinden gönderilir (navigation_node'u bypass eder)
+        # Stop command sent via /cmd_vel_nav (bypasses navigation_node)
         self.stop_cmd_pub = self.create_publisher(Twist, '/cmd_vel_nav', 10)
 
-        # --- Aboneler ---
+        # --- Subscribers ---
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self._odom_callback, 10)
 
-        # En uzak nokta (laser çerçevesinde)
-        self.farthest_sub = self.create_subscription(
-            PointStamped, '/farthest_point', self._farthest_callback, 10)
+        # Obstacle detection from lidar_processor
+        self.nearest_sub = self.create_subscription(
+            Float32, '/nearest_obstacle', self._nearest_obstacle_callback, 10)
 
-        # Hedefe ulaşıldı bildirimi
+        self.obstacle_sub = self.create_subscription(
+            Bool, '/obstacle_detected', self._obstacle_detected_callback, 10)
+
+        # Goal reached notification from navigation_node
         self.goal_reached_sub = self.create_subscription(
             Bool, '/goal_reached', self._goal_reached_callback, 10)
 
-        # --- Servisler ---
-        self.start_srv = self.create_service(
-            Trigger, '/start_mission', self._start_mission_srv)
-
+        # --- Services ---
         self.stop_srv = self.create_service(
             Trigger, '/stop_mission', self._stop_mission_srv)
+        self.cancel_client = self.create_client(Trigger, '/cancel_goal')
 
-        # Durum makinesi zamanlayıcısı
+        # State machine timer
         self.mission_timer = self.create_timer(
             1.0 / freq, self._state_machine_step)
 
-        self.get_logger().info('='*50)
-        self.get_logger().info('Görev düğümü başlatıldı.')
-        self.get_logger().info('Görevi başlatmak için: ros2 service call /start_mission std_srvs/srv/Trigger')
-        self.get_logger().info('='*50)
+        # User input thread
+        self._input_thread = threading.Thread(
+            target=self._get_user_input, daemon=True)
+        self._input_thread.start()
+
+        self.get_logger().info('=' * 50)
+        self.get_logger().info('Mission node started.')
+        self.get_logger().info('LiDAR: obstacle detection only.')
+        self.get_logger().info('=' * 50)
 
     # ------------------------------------------------------------------
-    # Abonelik geri çağırımları
+    # Subscription callbacks
     # ------------------------------------------------------------------
 
     def _odom_callback(self, msg: Odometry):
-        """Robot pozunu günceller."""
+        """Updates robot pose."""
         self.robot_x = msg.pose.pose.position.x
         self.robot_y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
@@ -123,73 +146,86 @@ class MissionNode(Node):
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self.robot_yaw = math.atan2(siny, cosy)
 
-    def _farthest_callback(self, msg: PointStamped):
-        """
-        Laser çerçevesindeki en uzak noktayı odom çerçevesine dönüştürür.
-        Tarama aşamasında kaydedilir.
-        """
-        if self.state != State.SCANNING:
-            return
+        # Save home position (first odom reading)
+        if not self.home_saved:
+            self.home_x = self.robot_x
+            self.home_y = self.robot_y
+            self.home_yaw = self.robot_yaw
+            self.home_saved = True
+            self.get_logger().info(
+                f'Home position saved: ({self.home_x:.2f}, {self.home_y:.2f})')
 
-        # Laser çerçevesindeki koordinat
-        lx = msg.point.x
-        ly = msg.point.y
+    def _nearest_obstacle_callback(self, msg: Float32):
+        """Updates nearest obstacle distance from lidar_processor."""
+        self.nearest_obstacle_dist = msg.data
 
-        # Odom çerçevesine dönüştür (robot başlangıçta 0,0,0 kabul edilir)
-        # Genel dönüşüm: odom = robot_pose * laser_offset * laser_point
-        # Basitleştirme: laser çerçevesi ≈ base_link → odom dönüşümü kullanılır
-        cos_y = math.cos(self.robot_yaw)
-        sin_y = math.sin(self.robot_yaw)
-        odom_x = self.robot_x + lx * cos_y - ly * sin_y
-        odom_y = self.robot_y + lx * sin_y + ly * cos_y
-
-        self._farthest_point = (odom_x, odom_y)
+    def _obstacle_detected_callback(self, msg: Bool):
+        """Updates obstacle detection flag from lidar_processor."""
+        self.obstacle_detected = msg.data
 
     def _goal_reached_callback(self, msg: Bool):
-        """Navigasyon düğümü hedefe ulaşıldığını bildirdi."""
+        """Navigation node reported goal reached."""
         if msg.data:
             self.goal_reached_flag = True
 
     # ------------------------------------------------------------------
-    # Servis geri çağırımları
+    # User input (runs in separate thread)
     # ------------------------------------------------------------------
 
-    def _start_mission_srv(self, request, response):
-        """Görevi başlat."""
-        if self.state not in [State.IDLE, State.DONE, State.ERROR]:
-            response.success = False
-            response.message = f'Görev zaten çalışıyor: {self.state}'
-            return response
+    def _get_user_input(self):
+        """Gets target position from user via console input. Phi is in degrees."""
+        while rclpy.ok():
+            if self.state == State.WAITING_INPUT:
+                try:
+                    user_input = input('\nHedef konum girin (x y phi[derece]): ')
+                    parts = user_input.strip().split()
+                    if len(parts) == 3:
+                        self.target_x = float(parts[0])
+                        self.target_y = float(parts[1])
+                        # phi is given in degrees, convert to radians
+                        self.target_yaw = math.radians(float(parts[2]))
+                        self.state = State.GOING_TO_TARGET
+                        self.goal_reached_flag = False
+                        self._send_goal(self.target_x, self.target_y, self.target_yaw)
+                        self.get_logger().info(
+                            f'Target received: x={self.target_x:.2f}, '
+                            f'y={self.target_y:.2f}, phi={float(parts[2]):.1f}°'
+                            f' ({self.target_yaw:.2f} rad)')
+                        self.get_logger().info('Going to target...')
+                    else:
+                        print('Hatali giris! Format: x y phi (ornek: 1.0 2.0 90)')
+                except ValueError:
+                    print('Hatali giris! Sayisal degerler girin.')
+                except EOFError:
+                    break
 
-        self._transition_to(State.SCANNING)
-        response.success = True
-        response.message = 'Görev başlatıldı.'
-        self.get_logger().info('Görev başlatıldı!')
-        return response
+    # ------------------------------------------------------------------
+    # Service callbacks
+    # ------------------------------------------------------------------
 
     def _stop_mission_srv(self, request, response):
-        """Görevi acil durdur."""
-        self._transition_to(State.DONE)
+        """Emergency stop the mission."""
+        self._transition_to(State.WAITING_INPUT)
         self._publish_stop()
         response.success = True
-        response.message = 'Görev durduruldu.'
-        self.get_logger().warn('Görev acil durduruldu!')
+        response.message = 'Mission stopped.'
+        self.get_logger().warn('Mission emergency stopped!')
         return response
 
     # ------------------------------------------------------------------
-    # Durum makinesi
+    # State machine
     # ------------------------------------------------------------------
 
     def _state_machine_step(self):
-        """Her kontrol döngüsünde çağrılır."""
-        if self.state == State.IDLE:
-            pass  # Servis bekleniyor
+        """Called every control loop iteration."""
+        if self.state == State.WAITING_INPUT:
+            pass  # Waiting for user input (handled in thread)
 
-        elif self.state == State.SCANNING:
-            self._handle_scanning()
+        elif self.state == State.GOING_TO_TARGET:
+            self._handle_going_to_target()
 
-        elif self.state == State.NAVIGATING_TO_TARGET:
-            self._handle_navigating_to_target()
+        elif self.state == State.STOPPED_BY_OBSTACLE:
+            self._handle_stopped_by_obstacle()
 
         elif self.state == State.AT_TARGET:
             self._handle_at_target()
@@ -197,121 +233,124 @@ class MissionNode(Node):
         elif self.state == State.RETURNING_HOME:
             self._handle_returning_home()
 
-        elif self.state == State.DONE:
-            pass  # Tamamlandı
-
-        # Durum mesajı yayınla
+        # Publish state message
         state_msg = String()
         state_msg.data = self.state
         self.state_pub.publish(state_msg)
 
-    def _handle_scanning(self):
-        """LiDAR'ın oturmasını bekler, sonra hedefi hesaplar."""
-        if self._scan_start_time is None:
-            self._scan_start_time = self.get_clock().now()
-            self.get_logger().info(
-                f'LiDAR taraması bekleniyor ({self.scan_settle:.1f} sn)...'
-            )
-            return
-
-        elapsed = (self.get_clock().now() - self._scan_start_time).nanoseconds / 1e9
-        if elapsed < self.scan_settle:
-            return
-
-        # Tarama tamamlandı — en uzak nokta alındı mı?
-        if self._farthest_point is None:
-            self.get_logger().error('En uzak nokta bulunamadı! LiDAR çalışıyor mu?')
-            self._transition_to(State.ERROR)
-            return
-
-        # Hedef: en uzak noktanın 50 cm öncesi (robot yönünde)
-        fx, fy = self._farthest_point
-        dist_to_far = math.sqrt(fx**2 + fy**2)  # Başlangıçta robot (0,0)'da
-
-        if dist_to_far <= self.stop_dist:
+    def _handle_going_to_target(self):
+        """
+        Navigating to user-specified target.
+        Checks for obstacles during transit.
+        """
+        # Check if obstacle is within stop distance
+        if self.nearest_obstacle_dist <= self.obstacle_stop_dist:
             self.get_logger().warn(
-                f'En uzak nokta zaten çok yakın: {dist_to_far:.2f} m'
-            )
-            self._transition_to(State.DONE)
+                f'OBSTACLE DETECTED at {self.nearest_obstacle_dist:.2f} m! '
+                f'Stopping (limit: {self.obstacle_stop_dist:.2f} m).')
+            self._publish_stop()
+            self._wait_done = False
+            self._transition_to(State.STOPPED_BY_OBSTACLE)
+            # Start wait timer for obstacle (uses same wait_time = 2.0s)
+            self._wait_timer = self.create_timer(
+                self.wait_time, self._wait_callback)
             return
 
-        # 50 cm öncesinde dur
-        scale = (dist_to_far - self.stop_dist) / dist_to_far
-        self._target_pose = (fx * scale, fy * scale)
-
-        self.get_logger().info(
-            f'En uzak nokta: ({fx:.2f}, {fy:.2f}) — mesafe: {dist_to_far:.2f} m'
-        )
-        self.get_logger().info(
-            f'Hedef (50 cm öncesi): ({self._target_pose[0]:.2f}, {self._target_pose[1]:.2f})'
-        )
-
-        # Navigasyon düğümüne hedef gönder
-        self._send_goal(*self._target_pose)
-        self.goal_reached_flag = False
-        self._transition_to(State.NAVIGATING_TO_TARGET)
-
-    def _handle_navigating_to_target(self):
-        """Hedefe ulaşılana kadar bekler."""
+        # Check if goal reached
         if self.goal_reached_flag:
-            self.get_logger().info('Hedefe ulaşıldı!')
+            self.get_logger().info(
+                f'Target reached: ({self.robot_x:.2f}, {self.robot_y:.2f})')
+            self._publish_stop()
+            self._wait_done = False
             self._transition_to(State.AT_TARGET)
+            # Start wait timer
+            self._wait_timer = self.create_timer(
+                self.wait_time, self._wait_callback)
+
+    def _handle_stopped_by_obstacle(self):
+        """
+        Robot stopped because of an obstacle.
+        Wait for wait_at_target seconds, then start returning home.
+        """
+        if self._wait_done:
+            self.get_logger().info(
+                f'Obstacle wait ({self.wait_time:.0f}s) complete. Returning to home...')
+            self.goal_reached_flag = False
+            self._send_goal(self.home_x, self.home_y, self.home_yaw)
+            self._transition_to(State.RETURNING_HOME)
 
     def _handle_at_target(self):
         """
-        Hedefte duruldu. Hemen eve dönüşe geçilir.
-        İstersen burada bekleme süresi eklenebilir.
+        Stopped at target. Waiting for wait_at_target seconds.
         """
-        self.get_logger().info('Başlangıç noktasına dönülüyor...')
-        self._send_goal(self.home_x, self.home_y)
-        self.goal_reached_flag = False
-        self._transition_to(State.RETURNING_HOME)
+        if self._wait_done:
+            self.get_logger().info(
+                f'{self.wait_time:.0f}s wait complete. Returning to home...')
+            self.goal_reached_flag = False
+            self._send_goal(self.home_x, self.home_y, self.home_yaw)
+            self._transition_to(State.RETURNING_HOME)
 
     def _handle_returning_home(self):
-        """Eve dönüş tamamlandı mı kontrol eder."""
+        """Checks if return home is complete."""
         if self.goal_reached_flag:
-            # Çift kontrol: odometri toleransı
             home_dist = math.sqrt(
                 (self.robot_x - self.home_x)**2 +
                 (self.robot_y - self.home_y)**2
             )
             if home_dist <= self.home_tol:
+                self.get_logger().info('=' * 50)
                 self.get_logger().info(
-                    f'Eve ulaşıldı! Mesafe: {home_dist:.2f} m. Motorlar durduruluyor.'
-                )
+                    f'Home reached! Distance: {home_dist:.2f} m')
+                self.get_logger().info(
+                    f'Position: x={self.robot_x:.2f}, y={self.robot_y:.2f}, '
+                    f'yaw={self.robot_yaw:.2f}')
+                self.get_logger().info('=' * 50)
                 self._publish_stop()
-                self._transition_to(State.DONE)
+                self._transition_to(State.WAITING_INPUT)
             else:
-                # Henüz ulaşılmadı, tekrar hedef gönder
+                # Not reached yet, resend goal
                 self.goal_reached_flag = False
-                self._send_goal(self.home_x, self.home_y)
+                self._send_goal(self.home_x, self.home_y, self.home_yaw)
 
     # ------------------------------------------------------------------
-    # Yardımcı metodlar
+    # Helper methods
     # ------------------------------------------------------------------
 
     def _transition_to(self, new_state: str):
-        """Durumu değiştirir ve loglar."""
-        self.get_logger().info(f'Durum: {self.state} → {new_state}')
+        """Transitions to new state and logs it."""
+        self.get_logger().info(f'State: {self.state} → {new_state}')
         self.state = new_state
 
-    def _send_goal(self, goal_x: float, goal_y: float):
-        """Navigasyon düğümüne hedef yayınlar."""
+    def _send_goal(self, goal_x: float, goal_y: float, goal_yaw: float = 0.0):
+        """Publishes goal to navigation node. Yaw encoded as quaternion."""
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'odom'
         msg.pose.position.x = goal_x
         msg.pose.position.y = goal_y
         msg.pose.position.z = 0.0
-        msg.pose.orientation.w = 1.0
+        # Encode yaw as quaternion (rotation around Z axis)
+        msg.pose.orientation.z = math.sin(goal_yaw / 2.0)
+        msg.pose.orientation.w = math.cos(goal_yaw / 2.0)
         self.goal_pub.publish(msg)
-        self.get_logger().info(f'Hedef gönderildi: ({goal_x:.2f}, {goal_y:.2f})')
+        self.get_logger().info(
+            f'Goal sent: ({goal_x:.2f}, {goal_y:.2f}, '
+            f'{math.degrees(goal_yaw):.1f}°)')
 
     def _publish_stop(self):
-        """Tüm hız komutlarını sıfırlar (motoru durdurur)."""
+        """Zeroes all velocity commands (stops motors) and cancels goal."""
         stop = Twist()
         self.stop_cmd_pub.publish(stop)
-        self.get_logger().info('DUR komutu gönderildi.')
+        if self.cancel_client.wait_for_service(timeout_sec=0.1):
+            self.cancel_client.call_async(Trigger.Request())
+        self.get_logger().info('STOP command sent and goal cancelled.')
+
+    def _wait_callback(self):
+        """Wait timer completed."""
+        self._wait_done = True
+        if self._wait_timer:
+            self._wait_timer.cancel()
+            self._wait_timer = None
 
 
 def main(args=None):
@@ -323,7 +362,10 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

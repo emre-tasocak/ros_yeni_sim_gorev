@@ -1,22 +1,26 @@
 """
-Gazebo Harmonic Simülasyon Launch Dosyası
+Gazebo Harmonic Simulation Launch File
 
-Mimari (ros2_control YOK — Gazebo native plugin'ler kullanılır):
+Architecture (no ros2_control — uses Gazebo native plugins):
   Gazebo VelocityControl  ← ros_gz_bridge ← ROS /cmd_vel
   Gazebo OdometryPublisher → ros_gz_bridge → ROS /odom → sim_odom_tf_node → TF
   Gazebo gpu_lidar         → ros_gz_bridge → ROS /scan  → lidar_processor
 
-Düğüm başlatma sırası:
+Node startup sequence:
   t= 0s : Gazebo + robot_state_publisher + RViz
   t= 5s : spawn_robot + ros_gz_bridge
   t= 9s : sim_odom_tf + lidar_processor + obstacle_avoidance + navigation + mission
 
-Kullanım:
+Usage:
   ros2 launch omni_robot_pkg simulation.launch.py
   ros2 launch omni_robot_pkg simulation.launch.py gui:=false rviz:=false
 
-Görevi başlatmak için (9s sonra):
-  ros2 service call /start_mission std_srvs/srv/Trigger
+Mission control:
+  If xterm is installed, mission_node opens in a separate xterm terminal.
+  If xterm is NOT installed, start mission_node manually in a separate terminal:
+    ros2 run omni_robot_pkg mission_node --ros-args -p use_sim_time:=true
+  Enter target coordinates: x y phi (e.g., 1.0 2.0 0)
+  LiDAR is used for obstacle detection only.
 """
 
 import os
@@ -40,22 +44,22 @@ def generate_launch_description():
     rviz_cfg   = os.path.join(pkg, 'rviz', 'omni_robot.rviz')
     gz_pkg     = get_package_share_directory('ros_gz_sim')
 
-    # --- Launch argümanları ---
+    # --- Launch arguments ---
     gui_arg  = DeclareLaunchArgument('gui',  default_value='true',
-                                     description='Gazebo GUI açılsın mı?')
+                                     description='Open Gazebo GUI?')
     rviz_arg = DeclareLaunchArgument('rviz', default_value='true',
-                                     description='RViz açılsın mı?')
+                                     description='Open RViz?')
     gui  = LaunchConfiguration('gui')
     rviz = LaunchConfiguration('rviz')
 
-    # robot_description stringi — ParameterValue ile YAML parse hatası önlenir
+    # robot_description string — ParameterValue prevents YAML parse errors
     robot_description = ParameterValue(Command(['xacro ', urdf_file]), value_type=str)
 
     # ================================================================
-    # t = 0s: Hemen başlayanlar
+    # t = 0s: Start immediately
     # ================================================================
 
-    # Gazebo Harmonic — GUI modu
+    # Gazebo Harmonic — GUI mode
     gz_sim_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gz_pkg, 'launch', 'gz_sim.launch.py')
@@ -67,7 +71,7 @@ def generate_launch_description():
         condition=IfCondition(gui),
     )
 
-    # Gazebo Harmonic — başsız (headless) mod
+    # Gazebo Harmonic — headless mode
     gz_sim_headless = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gz_pkg, 'launch', 'gz_sim.launch.py')
@@ -79,8 +83,8 @@ def generate_launch_description():
         condition=UnlessCondition(gui),
     )
 
-    # Robot State Publisher — hemen başlar; RViz'e robot modeli ve
-    # base_footprint→base_link→laser/kamera TF'lerini sağlar
+    # Robot State Publisher — starts immediately; provides robot model and
+    # base_footprint→base_link→laser/camera TFs to RViz
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -92,7 +96,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # RViz (isteğe bağlı)
+    # RViz (optional)
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -104,10 +108,10 @@ def generate_launch_description():
     )
 
     # ================================================================
-    # t = 5s: Gazebo hazır → Robot spawn + köprü
+    # t = 5s: Gazebo ready → Spawn robot + bridge
     # ================================================================
 
-    # Robotu Gazebo'ya spawn et
+    # Spawn robot into Gazebo
     spawn_robot = Node(
         package='ros_gz_sim',
         executable='create',
@@ -115,20 +119,20 @@ def generate_launch_description():
         arguments=[
             '-name',  'omni_robot',
             '-topic', 'robot_description',
-            '-x', '0.0', '-y', '0.0', '-z', '0.15',  # tekerleri yerden biraz yukarı
+            '-x', '0.0', '-y', '0.0', '-z', '0.15',  # slightly above ground
             '-R', '0.0', '-P', '0.0', '-Y', '0.0',
         ],
         parameters=[{'use_sim_time': True}],
         output='screen',
     )
 
-    # ros_gz_bridge köprüsü:
-    #   /cmd_vel          : ROS Twist  → Gz  (robot hareket komutu)
-    #   /model/.../odom   : Gz Odometry → ROS (odometri)
+    # ros_gz_bridge:
+    #   /cmd_vel          : ROS Twist  → Gz  (robot motion command)
+    #   /model/.../odom   : Gz Odometry → ROS (odometry)
     #   /lidar_gz         : Gz LaserScan → ROS /scan
-    #   /clock            : Gz Clock → ROS  (simülasyon zamanı)
+    #   /clock            : Gz Clock → ROS  (simulation time)
     #
-    # Yön sembolleri:
+    # Direction symbols:
     #   ]  = ROS → Gz  (subscribe ROS, publish Gz)
     #   [  = Gz → ROS  (subscribe Gz, publish ROS)
     bridge = Node(
@@ -158,11 +162,11 @@ def generate_launch_description():
     ])
 
     # ================================================================
-    # t = 9s: Spawn + bridge hazır → Uygulama düğümleri
+    # t = 9s: Spawn + bridge ready → Application nodes
     # ================================================================
 
-    # /odom → odom→base_footprint TF yayıncısı
-    # (OdometryPublisher'ın TF yayını kapalı; bu düğüm TF'yi üstlenir)
+    # /odom → odom→base_footprint TF broadcaster
+    # (OdometryPublisher TF disabled; this node handles TF)
     sim_odom_tf = Node(
         package='omni_robot_pkg',
         executable='sim_odom_tf',
@@ -171,7 +175,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # LiDAR işleme: 30cm filtre, en uzak nokta, engel tespiti
+    # LiDAR processing: 30 cm filter, farthest point, obstacle detection
     lidar_processor = Node(
         package='omni_robot_pkg',
         executable='lidar_processor',
@@ -180,7 +184,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # DWA engel kaçınma: /cmd_vel_nav → /cmd_vel (güvenli hız)
+    # DWA obstacle avoidance: /cmd_vel_nav → /cmd_vel (safe velocity)
     obstacle_avoidance = Node(
         package='omni_robot_pkg',
         executable='obstacle_avoidance',
@@ -189,7 +193,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Navigasyon: hedefe P-kontrolcü ile git
+    # Navigation: P-controller to goal
     navigation = Node(
         package='omni_robot_pkg',
         executable='navigation_node',
@@ -198,24 +202,34 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Görev kontrol: durum makinesi (IDLE→SCANNING→...→DONE)
+    # Mission control: user-input state machine
+    # Needs stdin access for user input
+    has_xterm = os.path.exists('/usr/bin/xterm')
+
     mission = Node(
         package='omni_robot_pkg',
         executable='mission_node',
         name='mission_node',
         parameters=[params, {'use_sim_time': True}],
         output='screen',
+        prefix='xterm -e' if has_xterm else '',
     )
 
-    delayed_app = TimerAction(period=9.0, actions=[
+    delayed_app_nodes = [
         sim_odom_tf,
         lidar_processor,
         obstacle_avoidance,
         navigation,
-        mission,
-    ])
+    ]
 
-    return LaunchDescription([
+    # Only include mission in launch if xterm is available
+    # Otherwise user must start it manually in a separate terminal
+    if has_xterm:
+        delayed_app_nodes.append(mission)
+
+    delayed_app = TimerAction(period=9.0, actions=delayed_app_nodes)
+
+    launch_items = [
         gui_arg,
         rviz_arg,
         gz_sim_gui,
@@ -224,4 +238,20 @@ def generate_launch_description():
         rviz_node,
         delayed_spawn,
         delayed_app,
-    ])
+    ]
+
+    if not has_xterm:
+        # Log instruction for the user
+        from launch.actions import LogInfo
+        launch_items.append(
+            LogInfo(msg=[
+                '\n',
+                '=' * 60, '\n',
+                'xterm not found. Start mission_node manually:\n',
+                '  ros2 run omni_robot_pkg mission_node '
+                '--ros-args -p use_sim_time:=true\n',
+                '=' * 60, '\n',
+            ])
+        )
+
+    return LaunchDescription(launch_items)

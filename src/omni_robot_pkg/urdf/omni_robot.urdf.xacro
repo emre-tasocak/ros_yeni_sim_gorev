@@ -1,15 +1,15 @@
 <?xml version="1.0"?>
 <!--
-  3-Tekerli Omni Robot URDF/Xacro — Gazebo Harmonic (ros2_control)
+  3-Wheeled Omni Robot URDF/Xacro — Gazebo Harmonic
 
-  Hareket: gz_ros2_control + JointGroupVelocityController (3 teker eklemi)
-  LiDAR:   gpu_lidar sensörü → ros_gz_bridge ile /scan
-  IMU:     gz imu sensörü → ros_gz_bridge ile /imu
+  Motion: Gazebo native VelocityControl plugin (direct body velocity)
+  LiDAR:  gpu_lidar sensor → ros_gz_bridge → /scan
+  IMU:    gz imu sensor → ros_gz_bridge → /imu
 -->
 <robot name="omni_robot" xmlns:xacro="http://ros.org/wiki/xacro">
 
   <!-- ============================= -->
-  <!--         Parametreler          -->
+  <!--         Parameters            -->
   <!-- ============================= -->
   <xacro:property name="wheel_radius"  value="0.050"/>
   <xacro:property name="wheel_width"   value="0.040"/>
@@ -24,7 +24,7 @@
   <!-- pi is a xacro built-in: ${pi} → 3.14159... (no need to redefine) -->
 
   <!-- ============================= -->
-  <!--         Materyaller           -->
+  <!--         Materials             -->
   <!-- ============================= -->
   <material name="dark_gray"><color rgba="0.2 0.2 0.2 1.0"/></material>
   <material name="gray">     <color rgba="0.5 0.5 0.5 1.0"/></material>
@@ -32,12 +32,12 @@
   <material name="black">    <color rgba="0.0 0.0 0.0 1.0"/></material>
   <material name="red">      <color rgba="0.8 0.0 0.0 1.0"/></material>
 
-  <!-- ros2_control kaldırıldı: Gazebo Harmonic native plugin'leri kullanılıyor
-       VelocityControl  → /cmd_vel ile doğrudan gövde hareketi
-       OdometryPublisher → /odom ve TF yayını                        -->
+  <!-- ros2_control removed: using Gazebo Harmonic native plugins
+       VelocityControl  → direct body motion via /cmd_vel
+       OdometryPublisher → publishes /odom and TF                    -->
 
   <!-- ============================= -->
-  <!--         Makrolar              -->
+  <!--         Macros                -->
   <!-- ============================= -->
   <xacro:macro name="omni_wheel" params="name pos_x pos_y wheel_angle">
     <link name="${name}">
@@ -68,7 +68,7 @@
     <joint name="${name}_joint" type="continuous">
       <parent link="base_link"/>
       <child link="${name}"/>
-      <!-- teker merkezi = base_link_z - base_height/2 = 0.11 - 0.06 = 0.05m (zeminde) -->
+      <!-- wheel center = base_link_z - base_height/2 = 0.11 - 0.06 = 0.05m (ground level) -->
       <origin xyz="${pos_x} ${pos_y} ${-base_height/2}"
               rpy="0 0 ${wheel_angle}"/>
       <axis xyz="0 1 0"/>
@@ -76,19 +76,19 @@
   </xacro:macro>
 
   <!-- ============================= -->
-  <!--         Linkler               -->
+  <!--         Links                 -->
   <!-- ============================= -->
 
   <link name="base_footprint"/>
   <joint name="base_footprint_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <!-- teker merkezi yerden wheel_radius yukarıda, gövde bunun üstünde -->
-    <!-- base_link merkezi = wheel_radius + base_height/2 = 0.05 + 0.06 = 0.11 m -->
+    <!-- wheel center is wheel_radius above ground; body sits above that -->
+    <!-- base_link center = wheel_radius + base_height/2 = 0.05 + 0.06 = 0.11 m -->
     <origin xyz="0 0 ${wheel_radius + base_height/2}" rpy="0 0 0"/>
   </joint>
 
-  <!-- Ana gövde -->
+  <!-- Main body -->
   <link name="base_link">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -115,13 +115,13 @@
   </link>
 
   <!--
-    Tekerlekler: 120° aralıklı, merkezden L=25 cm
-      wheel_1: -60° → sağ-ön   pos=(+0.5L, -0.866L)  spin_angle=+30°  (π/6)
-      wheel_2: +60° → sol-ön   pos=(+0.5L, +0.866L)  spin_angle=-30°  (-π/6)
-      wheel_3: 180° → arka     pos=(-L,    0)         spin_angle=+90°  (π/2)
+    Wheels: 120° apart, L=25 cm from center
+      wheel_1: -60° → right-front  pos=(+0.5L, -0.866L)  spin_angle=+30°  (π/6)
+      wheel_2: +60° → left-front   pos=(+0.5L, +0.866L)  spin_angle=-30°  (-π/6)
+      wheel_3: 180° → rear         pos=(-L,    0)         spin_angle=+90°  (π/2)
 
-    wheel_angle = spin ekseninin yaw açısı.
-    Spin ekseni radyal yönde → tekerlek teğet yönde yuvarlanır (omni).
+    wheel_angle = yaw angle of spin axis.
+    Spin axis is radial → wheel rolls in tangential direction (omni).
   -->
   <xacro:omni_wheel name="wheel_1"
     pos_x="${wheel_base * 0.5}"   pos_y="${-wheel_base * 0.866}"
@@ -135,7 +135,7 @@
     pos_x="${-wheel_base}"  pos_y="0.0"
     wheel_angle="${pi/2}"/>
 
-  <!-- LiDAR linki -->
+  <!-- LiDAR link -->
   <link name="laser">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -162,7 +162,7 @@
     <origin xyz="0 0 ${base_height/2 + lidar_height}" rpy="0 0 0"/>
   </joint>
 
-  <!-- Kamera linki (Intel RealSense D435b) -->
+  <!-- Camera link (Intel RealSense D435b) -->
   <link name="camera_link">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -196,7 +196,7 @@
     <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
   </joint>
 
-  <!-- IMU linki -->
+  <!-- IMU link -->
   <link name="imu_link">
     <inertial>
       <mass value="0.01"/>
@@ -212,11 +212,11 @@
   </joint>
 
   <!-- ============================= -->
-  <!--  Gazebo Harmonic Eklentileri  -->
+  <!--  Gazebo Harmonic Plugins      -->
   <!-- ============================= -->
 
-  <!-- Holonomik gövde hareketi: ROS /cmd_vel → VelocityControl plugin
-       Twist.linear.x/y → m/s, Twist.angular.z → rad/s (gövde çerçevesinde) -->
+  <!-- Holonomic body motion: ROS /cmd_vel → VelocityControl plugin
+       Twist.linear.x/y → m/s, Twist.angular.z → rad/s (body frame) -->
   <gazebo>
     <plugin filename="gz-sim-velocity-control-system"
             name="gz::sim::systems::VelocityControl">
@@ -224,8 +224,8 @@
     </plugin>
   </gazebo>
 
-  <!-- Eklem açılarını yayınlar → ros_gz_bridge /joint_states'e köprüler
-       → robot_state_publisher teker TF'lerini günceller (RViz'de animasyon) -->
+  <!-- Publishes joint angles → ros_gz_bridge bridges to /joint_states
+       → robot_state_publisher updates wheel TFs (animation in RViz) -->
   <gazebo>
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
@@ -233,9 +233,9 @@
     </plugin>
   </gazebo>
 
-  <!-- Odometri: fiziğin gerçek pozunu okuyup /model/omni_robot/odometry yayınlar
-       ros_gz_bridge bunu ROS /odom'a köprüler.
-       publish_tf=false: TF'yi sim_odom_tf_node yayınlar (base_footprint→base_link çakışmasını önler) -->
+  <!-- Odometry: reads physics ground-truth pose, publishes /model/omni_robot/odometry
+       ros_gz_bridge maps this to ROS /odom.
+       publish_tf=false: TF is published by sim_odom_tf_node (prevents base_footprint→base_link conflict) -->
   <gazebo>
     <plugin filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
@@ -247,7 +247,7 @@
     </plugin>
   </gazebo>
 
-  <!-- Teker sürtünmesi (omni: yan kayma için mu2 düşük) -->
+  <!-- Wheel friction (omni: low mu2 for lateral sliding) -->
   <gazebo reference="wheel_1">
     <mu1>1.0</mu1>
     <mu2>0.1</mu2>
@@ -261,8 +261,8 @@
     <mu2>0.1</mu2>
   </gazebo>
 
-  <!-- LiDAR sensörü (Gazebo Harmonic: gpu_lidar) -->
-  <!-- ros_gz_bridge ile /lidar_gz → /scan olarak köprülenir -->
+  <!-- LiDAR sensor (Gazebo Harmonic: gpu_lidar) -->
+  <!-- Bridged via ros_gz_bridge: /lidar_gz → /scan -->
   <gazebo reference="laser">
     <sensor name="lidar_sensor" type="gpu_lidar">
       <always_on>true</always_on>
@@ -293,8 +293,8 @@
     </sensor>
   </gazebo>
 
-  <!-- IMU sensörü (Gazebo Harmonic) -->
-  <!-- ros_gz_bridge ile /imu_gz → /imu olarak köprülenir -->
+  <!-- IMU sensor (Gazebo Harmonic) -->
+  <!-- Bridged via ros_gz_bridge: /imu_gz → /imu -->
   <gazebo reference="imu_link">
     <sensor name="imu_sensor" type="imu">
       <always_on>true</always_on>

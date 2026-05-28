@@ -11,38 +11,38 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Launch dosyaları
+        # Launch files
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        # URDF dosyaları
+        # URDF files
         (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
-        # Dünya dosyaları
+        # World files
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),
-        # Konfigürasyon dosyaları
+        # Configuration files
         (os.path.join('share', package_name, 'config'), glob('config/*')),
-        # Rviz dosyaları
+        # RViz files
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Emre Taşocak',
+    maintainer='Emre Tasocak',
     maintainer_email='tasocak131@gmail.com',
-    description='3-tekerli omni robot ROS2 kontrol paketi',
+    description='3-wheeled omni robot ROS2 control package',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # Gerçek robot düğümleri
+            # Real robot nodes
             'roboclaw_driver  = omni_robot_pkg.roboclaw_driver_node:main',
             'lidar_node       = omni_robot_pkg.lidar_node:main',
-            # Ortak düğümler (simülasyon + gerçek robot)
+            # Shared nodes (simulation + real robot)
             'odometry_node    = omni_robot_pkg.odometry_node:main',
             'lidar_processor  = omni_robot_pkg.lidar_processor_node:main',
             'obstacle_avoidance = omni_robot_pkg.obstacle_avoidance_node:main',
             'navigation_node  = omni_robot_pkg.navigation_node:main',
             'mission_node     = omni_robot_pkg.mission_node:main',
-            # Simülasyon: /odom → odom→base_footprint TF yayıncısı
+            # Simulation: /odom → odom→base_footprint TF broadcaster
             'sim_odom_tf          = omni_robot_pkg.sim_odom_tf_node:main',
-            # (eski) Simülasyon: Twist → teker komutları + wheel_ticks
+            # Simulation: Twist → wheel commands + wheel_ticks
             'sim_cmd_vel_controller = omni_robot_pkg.sim_cmd_vel_controller_node:main',
         ],
     },

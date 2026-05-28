@@ -1,15 +1,15 @@
 """
-Simülasyon Odometri → TF Yayıncısı
+Simulation Odometry → TF Publisher
 
-Gazebo OdometryPublisher'dan gelen /odom mesajını alır,
-odom → base_footprint TF dönüşümünü yayınlar.
+Receives /odom messages from Gazebo OdometryPublisher and
+publishes the odom → base_footprint TF transform.
 
-Neden gerekli:
-  OdometryPublisher'ın kendi TF yayını 'odom → base_link' üretir.
-  Ama URDF'de base_footprint → base_link sabit eklemi var.
-  İki farklı düğüm 'base_link'e ata atamaz (TF ağacı döngüsü olur).
-  Bu düğüm 'odom → base_footprint' yayınlar; robot_state_publisher
-  'base_footprint → base_link → laser/kamera/...' zincirini tamamlar.
+Why this is needed:
+  OdometryPublisher's own TF output produces 'odom → base_link'.
+  But the URDF has a fixed joint base_footprint → base_link.
+  Two different nodes cannot parent 'base_link' (creates TF loop).
+  This node publishes 'odom → base_footprint'; robot_state_publisher
+  completes the 'base_footprint → base_link → laser/camera/...' chain.
 """
 
 import rclpy
@@ -20,14 +20,14 @@ import tf2_ros
 
 
 class SimOdomTFNode(Node):
-    """Odometri mesajını odom→base_footprint TF'ye dönüştürür."""
+    """Converts odometry message to odom→base_footprint TF."""
 
     def __init__(self):
         super().__init__('sim_odom_tf')
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self._odom_callback, 10)
-        self.get_logger().info('Sim odom→base_footprint TF yayıncısı başlatıldı.')
+        self.get_logger().info('Sim odom→base_footprint TF broadcaster started.')
 
     def _odom_callback(self, msg: Odometry):
         t = TransformStamped()
@@ -36,7 +36,7 @@ class SimOdomTFNode(Node):
         t.child_frame_id = 'base_footprint'
         t.transform.translation.x = msg.pose.pose.position.x
         t.transform.translation.y = msg.pose.pose.position.y
-        t.transform.translation.z = 0.0   # 2D robot: zemin düzlemi
+        t.transform.translation.z = 0.0   # 2D robot: ground plane
         t.transform.rotation = msg.pose.pose.orientation
         self.tf_broadcaster.sendTransform(t)
 

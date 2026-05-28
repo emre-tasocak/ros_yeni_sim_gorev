@@ -1,16 +1,16 @@
 """
-RoboClaw Motor Sürücü Düğümü
+RoboClaw Motor Driver Node
 
-Her iki RoboClaw aynı UART hattında (GPIO 14 TX / GPIO 15 RX, /dev/ttyAMA0).
-Multi-drop bağlantı: adres 0x80 (RC1) ve 0x81 (RC2) ile ayrışır.
-Tek Roboclaw nesnesi, iki farklı adrese komut gönderir.
+Both RoboClaws share the same UART line (GPIO 14 TX / GPIO 15 RX, /dev/ttyAMA0).
+Multi-drop connection: distinguished by address 0x80 (RC1) and 0x81 (RC2).
+A single Roboclaw object sends commands to both addresses.
 
-Motor eşlemesi:
-  RC1 (0x80) M2 → Teker 1 (ters)
-  RC1 (0x80) M1 → Teker 2 (ters)
-  RC2 (0x81) M2 → Teker 3 (düz)
+Motor mapping:
+  RC1 (0x80) M2 → Wheel 1 (reversed)
+  RC1 (0x80) M1 → Wheel 2 (reversed)
+  RC2 (0x81) M2 → Wheel 3 (forward)
 
-Port izinleri için:
+For port permissions:
   sudo chmod 666 /dev/ttyAMA0
 """
 
@@ -59,7 +59,7 @@ class RoboclawDriverNode(Node):
 
         self.kinematics = OmniKinematics(r, L, tpr, gr)
 
-        # Tek RC nesnesi — her iki adrese de komut gönderir
+        # Single RC object — sends commands to both addresses
         self.hardware_ok = False
         self.rc = Roboclaw(port, baud)
         self._init_roboclaw(port, pid_p, pid_i, pid_d, int(qpps))
@@ -78,36 +78,36 @@ class RoboclawDriverNode(Node):
         self.encoder_timer = self.create_timer(1.0 / freq, self._read_encoders)
 
         if self.hardware_ok:
-            self.get_logger().info(f'RoboClaw bağlandı ({port}). Adresler: {self.addr1}, {self.addr2}')
+            self.get_logger().info(f'RoboClaw connected ({port}). Addresses: {self.addr1}, {self.addr2}')
         else:
             self.get_logger().error(
-                f'RoboClaw bağlanamadı ({port}). '
-                'sudo chmod 666 /dev/ttyAMA0 ve kablo bağlantısını kontrol et.')
+                f'RoboClaw could not connect ({port}). '
+                'Check: sudo chmod 666 /dev/ttyAMA0 and cable connections.')
 
     def _init_roboclaw(self, port, p, i, d, qpps):
         for attempt in range(6):
             if self.rc.Open() != 0:
                 break
-            self.get_logger().warn(f'RoboClaw bağlantı denemesi {attempt+1}/6...')
+            self.get_logger().warn(f'RoboClaw connection attempt {attempt+1}/6...')
             time.sleep(0.5)
         else:
-            self.get_logger().error(f'RoboClaw açılamadı: {port}')
+            self.get_logger().error(f'Could not open RoboClaw: {port}')
             return
 
         try:
-            self.rc.SetM2VelocityPID(self.addr1, p, i, d, qpps)  # Teker 1
-            self.rc.SetM1VelocityPID(self.addr1, p, i, d, qpps)  # Teker 2
-            self.rc.SetM2VelocityPID(self.addr2, p, i, d, qpps)  # Teker 3
+            self.rc.SetM2VelocityPID(self.addr1, p, i, d, qpps)  # Wheel 1
+            self.rc.SetM1VelocityPID(self.addr1, p, i, d, qpps)  # Wheel 2
+            self.rc.SetM2VelocityPID(self.addr2, p, i, d, qpps)  # Wheel 3
             self.hardware_ok = True
         except Exception as e:
-            self.get_logger().error(f'PID ayarı başarısız: {e}')
+            self.get_logger().error(f'PID configuration failed: {e}')
 
     def _reset_encoders(self):
         try:
             self.rc.ResetEncoders(self.addr1)
             self.rc.ResetEncoders(self.addr2)
         except Exception as e:
-            self.get_logger().warn(f'Enkoder sıfırlama hatası: {e}')
+            self.get_logger().warn(f'Encoder reset error: {e}')
 
     def _cmd_vel_callback(self, msg: Twist):
         if not self.hardware_ok:
@@ -122,32 +122,32 @@ class RoboclawDriverNode(Node):
         t3 = int(self.kinematics.velocity_to_ticks_per_sec(w3))
 
         try:
-            self.rc.SpeedM2(self.addr1, -t1)  # Teker 1 — RC1 M2
-            self.rc.SpeedM1(self.addr1, -t2)  # Teker 2 — RC1 M1
-            self.rc.SpeedM2(self.addr2,  t3)  # Teker 3 — RC2 M2
+            self.rc.SpeedM2(self.addr1, -t1)  # Wheel 1 — RC1 M2
+            self.rc.SpeedM1(self.addr1, -t2)  # Wheel 2 — RC1 M1
+            self.rc.SpeedM2(self.addr2,  t3)  # Wheel 3 — RC2 M2
         except Exception as e:
-            self.get_logger().warn(f'Motor komut hatası: {e}', throttle_duration_sec=2.0)
+            self.get_logger().warn(f'Motor command error: {e}', throttle_duration_sec=2.0)
 
     def _read_encoders(self):
         if not self.hardware_ok:
             return
         try:
-            raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Teker 1
-            raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Teker 2
-            raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Teker 3
+            raw1 = self.rc.ReadEncM2(self.addr1)  # RC1 M2 → Wheel 1
+            raw2 = self.rc.ReadEncM1(self.addr1)  # RC1 M1 → Wheel 2
+            raw3 = self.rc.ReadEncM2(self.addr2)  # RC2 M2 → Wheel 3
 
             ok1 = len(raw1) >= 3 and raw1[0]
             ok2 = len(raw2) >= 3 and raw2[0]
             ok3 = len(raw3) >= 3 and raw3[0]
 
             if not ok1:
-                self.get_logger().warn('Teker1 (RC1 M2) enkoder okunamadı!',
+                self.get_logger().warn('Wheel1 (RC1 M2) encoder read failed!',
                                        throttle_duration_sec=3.0)
             if not ok2:
-                self.get_logger().warn('Teker2 (RC1 M1) enkoder okunamadı!',
+                self.get_logger().warn('Wheel2 (RC1 M1) encoder read failed!',
                                        throttle_duration_sec=3.0)
             if not ok3:
-                self.get_logger().warn('Teker3 (RC2 M2) enkoder okunamadı!',
+                self.get_logger().warn('Wheel3 (RC2 M2) encoder read failed!',
                                        throttle_duration_sec=3.0)
 
             cur = [
@@ -168,7 +168,7 @@ class RoboclawDriverNode(Node):
             msg.data = delta
             self.wheel_ticks_pub.publish(msg)
         except Exception as e:
-            self.get_logger().warn(f'Enkoder okuma hatası: {e}', throttle_duration_sec=2.0)
+            self.get_logger().warn(f'Encoder read error: {e}', throttle_duration_sec=2.0)
 
     def stop_all(self):
         if not self.hardware_ok:
